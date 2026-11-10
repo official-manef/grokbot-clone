@@ -226,3 +226,11 @@ downloaded: magic ok, 64x64, 179 bytes
 
 The tool was hidden until the capability existed, then it appeared and worked. No code changed
 to switch it on.
+
+**Wake after suspend.** Found by stopping a container the way `suspend` does and asking the API
+to wake it. Before the fix the API answered `status: "running"` while Docker still said `exited`,
+and the wake never happened: `ensureComputer` branched on the backend's raw status word
+(`suspended`/`suspending`), which Docker spells `exited`. It now branches on `mapStatus()`, the
+same mapping `waitRunning` uses, so both backends go down one path. `POST /computer/ensure` also
+awaits the work instead of answering with the stale row — that staleness is what made the failure
+look like success.

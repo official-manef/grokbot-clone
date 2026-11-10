@@ -81,25 +81,29 @@ export function ensureComputer(userId: string): Promise<string> {
         return c.id;
       }
       const c = await box.get(r.orgo_id);
-      if (c.status === 'running') {
+      // Branch on the mapped status, not the backend's own word: Docker says
+      // 'exited' where Orgo says 'suspended', and matching on the raw value is
+      // how a wake silently fell through to a 240 s timeout.
+      const status = mapStatus(c.asleep ? 'suspended' : c.status);
+      if (status === 'running') {
         if (r.status !== 'running') setStatus(userId, 'running');
         return c.id;
       }
-      if (c.status === 'suspended' || c.status === 'suspending' || c.asleep) {
+      if (status === 'suspended' || status === 'suspending') {
         const t0 = Date.now();
         console.log(`[computer] resume user=${userId} computer=${c.id} (was ${c.status}${c.asleep ? `, asleep in ${c.asleep.where}` : ''})`);
         setStatus(userId, 'resuming');
         // Let an in-flight suspend settle first; resuming mid-suspend can be rejected.
-        for (let i = 0; i < 40 && (await box.get(c.id)).status === 'suspending'; i++) await new Promise((res) => setTimeout(res, 3000));
+        for (let i = 0; i < 40 && mapStatus((await box.get(c.id)).status) === 'suspending'; i++) await new Promise((res) => setTimeout(res, 3000));
         await box.resume(c.id);
         await waitRunning(c.id);
         console.log(`[computer] resumed user=${userId} in ${Math.round((Date.now() - t0) / 1000)}s`);
-      } else if (c.status === 'frozen' || c.status === 'stopped' || c.status === 'error') {
+      } else if (status === 'stopped' || status === 'error') {
         setStatus(userId, 'starting');
         await box.start(c.id);
         await waitRunning(c.id);
       } else {
-        setStatus(userId, mapStatus(c.status));
+        setStatus(userId, status);
         await waitRunning(c.id);
       }
       setStatus(userId, 'running');
@@ -124,7 +128,7 @@ async function waitRunning(id: string, timeoutMs = 240_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     const c = await box.get(id);
-    if (c.status === 'running') return;
+    if (mapStatus(c.status) === 'running') return;
     await new Promise((r) => setTimeout(r, 3000));
   }
   throw new Error('Timed out waiting for the computer to start');

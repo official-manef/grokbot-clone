@@ -302,9 +302,15 @@ api.delete('/memories/:id', (c) => {
 
 api.get('/computer', async (c) => c.json({ computer: await refreshComputer(c.get('user').id) }));
 
-api.post('/computer/ensure', (c) => {
+api.post('/computer/ensure', async (c) => {
   const userId = c.get('user').id;
-  ensureComputer(userId).catch((e) => console.warn('[computer] ensure failed', e.message));
+  try {
+    // Await it. Answering with the stale row made the UI show "running" while
+    // nothing had started, which hid a failed wake behind a plausible state.
+    await ensureComputer(userId);
+  } catch (e: any) {
+    console.warn('[computer] ensure failed', e?.message ?? e);
+  }
   return c.json({ computer: computerState(userId) });
 });
 
