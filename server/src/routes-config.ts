@@ -6,7 +6,7 @@ import { hub } from './lib/hub.js';
 import { requireUser, type AuthVars } from './lib/auth.js';
 import { getBotRow, listRoutines, listTasks } from './store.js';
 import { computerState, ensureComputer } from './computer.js';
-import { box as desktopBackend } from './box.js';
+import { box as desktopBackend, boxGrokbot } from './box.js';
 import { runInBotQueue } from './agent/loop.js';
 import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent/memory.js';
 import { idleConfig, viewerCount } from './idle.js';
@@ -127,9 +127,9 @@ configApi.post('/bots/:id/compact', async (c) => {
   return c.json({ itemsBefore: before, itemsAfter: after, compacted: after !== before });
 });
 
-// ---------- library: files under /root/grokbot/files/<botId> on the bot's computer ----------
+// ---------- library: files under {boxGrokbot()}/files/<botId> in the bot's box ----------
 
-const LIB_ROOT = '/root/grokbot/files';
+const LIB_ROOT = `${boxGrokbot()}/files`;
 
 function safeRel(p: string | undefined): string | null {
   const rel = (p ?? '').replace(/^\/+|\/+$/g, '');
@@ -193,7 +193,19 @@ configApi.post('/bots/:id/files/download', async (c) => {
   try {
     const lease = await boxFor(user.id, b.id, true);
     if (!lease) return c.json({ error: 'computer unavailable' }, 409);
-    const r: any = await desktopBackend.exportFile(lease.computerId, `${LIB_ROOT}/${b.id}/${rel}`);
+    const full = `${LIB_ROOT}/${b.id}/${rel}`;
+    const r: any = await desktopBackend.exportFile(lease.computerId, full);
+    // A backend with an object store answers with a signed URL; a local box has
+    // no store, so the bytes come back and are streamed here. Both are one shape
+    // for the client: it always receives a URL it can follow.
+    if (r?.bytes) {
+      const name = rel.split('/').pop() || 'file';
+      return c.body(new Uint8Array(r.bytes), 200, {
+        'Content-Type': contentTypeFor(name),
+        'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
+        'Cache-Control': 'no-store',
+      });
+    }
     const url = r?.url ?? r?.file?.url ?? r?.download_url;
     if (!url) return c.json({ error: 'export returned no link' }, 502);
     return c.json({ url });
@@ -201,6 +213,26 @@ configApi.post('/bots/:id/files/download', async (c) => {
     return c.json({ error: String(e?.message ?? e).slice(0, 300) }, 502);
   }
 });
+
+function contentTypeFor(name: string): string {
+  const ext = name.toLowerCase().split('.').pop() ?? '';
+  const map: Record<string, string> = {
+    md: 'text/markdown; charset=utf-8',
+    txt: 'text/plain; charset=utf-8',
+    csv: 'text/csv; charset=utf-8',
+    json: 'application/json',
+    html: 'text/html; charset=utf-8',
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    zip: 'application/zip',
+  };
+  return map[ext] ?? 'application/octet-stream';
+}
 
 // ---------- computer: screens, reset, hibernation ----------
 
@@ -223,7 +255,7 @@ configApi.post('/bots/:id/screen/reset', async (c) => {
   if (!lease) return c.json({ ok: true, note: 'no screen yet' });
   const comp = db.prepare("SELECT orgo_id FROM computers WHERE user_id=? AND status='running'").get(user.id) as any;
   if (!comp?.orgo_id) return c.json({ error: 'Wake the computer first' }, 409);
-  const profile = `/root/grokbot/profiles/${b.id}`;
+  const profile = `${boxGrokbot()}/profiles/${b.id}`;
   try {
     await desktopBackend.bash(comp.orgo_id, undefined, `pkill -f ${shq(`user-data-dir=${profile}`)}; rm -f ${shq(profile)}/Singleton*; echo ok`, 30).catch(() => null);
     if (lease.screen_id !== 'default') {

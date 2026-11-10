@@ -55,7 +55,34 @@ export const configApi = {
   botTasks: (botId: string) => req<{ tasks: Task[] }>('GET', `/bots/${botId}/tasks`),
 
   files: (botId: string, path = '', wake = false) => req<LibraryListing>('GET', `/bots/${botId}/files?path=${encodeURIComponent(path)}${wake ? '&wake=1' : ''}`),
-  downloadFile: (botId: string, path: string) => req<{ url: string }>('POST', `/bots/${botId}/files/download`, { path }),
+
+  /**
+   * Download a Library file. The server answers either with a signed URL (a
+   * backend that has an object store) or with the bytes themselves (a local
+   * box). Both become an object URL here, so the caller never branches.
+   */
+  downloadFile: async (botId: string, path: string): Promise<{ url: string; revoke?: () => void }> => {
+    const res = await fetch(`/api/bots/${botId}/files/download`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
+      throw new ApiError(res.status, msg);
+    }
+    const type = res.headers.get('content-type') ?? '';
+    if (type.includes('application/json')) {
+      const j = (await res.json()) as { url?: string };
+      if (!j.url) throw new ApiError(502, 'download returned no link');
+      return { url: j.url };
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    return { url, revoke: () => URL.revokeObjectURL(url) };
+  },
 
   computerDetails: () => req<ComputerDetails>('GET', '/computer/details'),
   wake: () => req<{ computer: ComputerState }>('POST', '/computer/ensure'),

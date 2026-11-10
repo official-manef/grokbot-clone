@@ -17,6 +17,15 @@ import { CapabilityError } from './lib/capability-error.js';
 
 export const mode = () => env.desktop.mode;
 
+/**
+ * Where the bot's own files live inside its box. This is the single source of
+ * truth: the tools write here, the Library reads here, and the two must agree
+ * or a saved file is invisible. Root on an Orgo VM; the unprivileged bot user
+ * on a Docker box.
+ */
+export const boxHome = (): string => (env.desktop.mode === 'docker' ? '/home/bot' : '/root');
+export const boxGrokbot = (): string => `${boxHome()}/grokbot`;
+
 function dockerOnly(): boolean {
   return env.desktop.mode === 'docker';
 }

@@ -30,10 +30,12 @@ export function LibraryTab({ bot }: { bot: Bot }) {
     const rel = path ? `${path}/${f.name}` : f.name;
     setBusyFile(f.name); setError(null);
     try {
-      const { url } = await configApi.downloadFile(bot.id, rel);
+      const { url, revoke } = await configApi.downloadFile(bot.id, rel);
       const a = document.createElement('a');
       a.href = url; a.download = f.name; a.rel = 'noopener';
       document.body.appendChild(a); a.click(); a.remove();
+      // An object URL lives until it is revoked; a signed URL should not be.
+      setTimeout(() => revoke?.(), 60_000);
     } catch (e) { setError(`Couldn’t download ${f.name}: ${(e as Error).message}`); }
     finally { setBusyFile(null); }
   };

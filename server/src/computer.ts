@@ -2,7 +2,7 @@ import { db, now } from './db.js';
 import { env } from './env.js';
 import { hub } from './lib/hub.js';
 import { orgo, OrgoError } from './orgo.js';
-import { box, mode as desktopMode } from './box.js';
+import { box, boxGrokbot, mode as desktopMode } from './box.js';
 import { getLive } from './store.js';
 import type { ComputerState } from './types.js';
 
@@ -133,7 +133,7 @@ async function waitRunning(id: string, timeoutMs = 240_000) {
 /** First-boot setup: a profile dir for per-bot Chrome sessions. */
 async function prepareBox(id: string) {
   try {
-    await box.bash(id, undefined, 'mkdir -p /root/grokbot/profiles /root/grokbot/files && (which google-chrome || which chromium || which chromium-browser || which firefox) 2>/dev/null', 60);
+    await box.bash(id, undefined, `mkdir -p ${boxGrokbot()}/profiles ${boxGrokbot()}/files && (which google-chrome || which chromium || which chromium-browser || which firefox) 2>/dev/null`, 60);
   } catch { /* non-fatal */ }
 }
 
@@ -167,7 +167,7 @@ export async function screenFor(userId: string, botId: string): Promise<{ comput
       const victim = leased.find((l) => !getLive(l.bot_id).isRunning && l.screen_id !== 'default') ?? leased.find((l) => l.screen_id !== 'default') ?? leased[0];
       db.prepare('DELETE FROM screens WHERE bot_id=?').run(victim.bot_id);
       screenId = victim.screen_id;
-      try { await box.bash(computerId, screenId!, `pkill -f "user-data-dir=/root/grokbot/profiles/${victim.bot_id}" || true`, 20); } catch { /* best effort */ }
+      try { await box.bash(computerId, screenId!, `pkill -f "user-data-dir=${boxGrokbot()}/profiles/${victim.bot_id}" || true`, 20); } catch { /* best effort */ }
     }
   }
   db.prepare('INSERT OR REPLACE INTO screens(bot_id,user_id,screen_id,last_used_at) VALUES (?,?,?,?)').run(botId, userId, screenId, now());

@@ -274,7 +274,7 @@ export async function bash(
   // but it runs INSIDE the box as the unprivileged bot user. `sh -lc` supplies
   // its own argv, so the container name is still a separate argument.
   const r = await docker(
-    ['exec', '-e', `DISPLAY=${display}`, '-w', '/home/bot', assertName(id), 'sh', '-lc', command],
+    ['exec', '-e', `DISPLAY=${display}`, '-w', env.desktop.mode === 'docker' ? '/home/bot' : '/root', assertName(id), 'sh', '-lc', command],
     { timeoutMs },
   );
   return { success: r.code === 0, output: r.stdout + (r.stderr ? `\n${r.stderr}` : ''), exit_code: r.code };

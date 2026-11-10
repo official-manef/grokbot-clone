@@ -191,3 +191,18 @@ The chat path translates stored Responses items (message / function_call /
 function_call_output) into chat messages and reshapes the upstream delta stream back into
 `response.output_text.delta` + `response.completed`, so `agent/loop.ts` reads one vocabulary
 regardless of provider.
+
+**Library round trip.** The bot was asked to save a file; it did, and the API could see and serve it:
+
+```
+GET  /api/bots/<id>/files
+{"status":"ok","path":"","files":[{"name":"notes.txt","size":18,"modifiedAt":...,"isDir":false}]}
+
+POST /api/bots/<id>/files/download {"path":"notes.txt"}
+200, text/plain; charset=utf-8, Content-Length: 18
+hello from the box
+```
+
+Two bugs this caught: `save_file` wrote to `/home/bot/...` while the Library read
+`/root/grokbot/files`, and the Docker `exportFile` returns bytes where the Orgo one returned a
+signed URL. Both are fixed by one `boxGrokbot()` constant and a route that streams bytes.
