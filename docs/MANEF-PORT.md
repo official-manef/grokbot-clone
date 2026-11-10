@@ -206,3 +206,23 @@ hello from the box
 Two bugs this caught: `save_file` wrote to `/home/bot/...` while the Library read
 `/root/grokbot/files`, and the Docker `exportFile` returns bytes where the Orgo one returned a
 signed URL. Both are fixed by one `boxGrokbot()` constant and a route that streams bytes.
+
+**Provider adapters.** The gateway has no image or TTS model, so `server/test/providers.test.mjs`
+runs each adapter against a local mock in its own process (env resolves once per process, as at
+boot). 8/8 pass: b64_json and `data:` parsing, provider error surfacing, a TTS round trip,
+multipart STT, a realtime 404 treated as a gap, and secret minting.
+
+**image_generate, end to end.** With `IMAGE_BASE_URL` pointed at a mock that returns a 64×64 PNG,
+the bot was asked for a blue square:
+
+```
+[mock-image] POST /images/generations prompt="A simple solid blue square, ..."
+
+GET /api/bots/<id>/files
+{"files":[{"name":"blue-square.png","size":179,...}]}
+
+downloaded: magic ok, 64x64, 179 bytes
+```
+
+The tool was hidden until the capability existed, then it appeared and worked. No code changed
+to switch it on.
