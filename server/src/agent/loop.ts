@@ -6,7 +6,7 @@ import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getRow, loadHistory, setLive, updateRow } from '../store.js';
 import type { MessageBody, ToolCallBody } from '../types.js';
 import { composioTools, toolkitInfo } from '../composio.js';
-import { llm, model, hostedTools, stripHosted, describeLLMError, llmConfigured } from '../providers/llm.js';
+import { llm, model, protocol, hostedTools, stripHosted, describeLLMError, chatStream, llmConfigured } from '../providers/llm.js';
 import { systemPrompt } from './prompt.js';
 import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
@@ -279,13 +279,17 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
 
   let stream: any;
   try {
-    stream = await llm().responses.create(body, { signal });
+    stream = protocol() === 'chat'
+      ? await chatStream({ input, tools: body.tools, signal, effort: bot.effort ?? 'medium' })
+      : await llm().responses.create(body, { signal });
   } catch (e: any) {
     // If a Composio tool schema is rejected, retry with only our own tools.
     if (e?.status === 400 && tools.length > functionSchemas().length + 2) {
       console.warn('[agent] 400 with composio tools, retrying without:', describeLLMError(e));
       body.tools = hostedTools() ? [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }] : functionSchemas();
-      stream = await llm().responses.create(body, { signal });
+      stream = protocol() === 'chat'
+        ? await chatStream({ input, tools: body.tools, signal, effort: bot.effort ?? 'medium' })
+        : await llm().responses.create(body, { signal });
     } else throw e;
   }
 

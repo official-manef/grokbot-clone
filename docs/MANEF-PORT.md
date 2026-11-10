@@ -178,3 +178,16 @@ handshake code unchanged and only swap the upstream dial.
 yet merged. `orgo.ts` remains compiled but untested since upstream; `DESKTOP_MODE=orgo` is
 for rollback only. Four containers at 8 GB each is 32 GB of RAM, so `DESKTOP_RAM_GB` is the
 first thing to lower on a small host.
+
+**Both protocols verified.** The agent loop is protocol-agnostic; `LLM_PROTOCOL` selects the
+wire format and `providers/llm.ts` translates.
+
+| Protocol | Model | Plain turn | Tool call |
+| --- | --- | --- | --- |
+| `responses` | `cx/gpt-6.1-sol` | `PORT OK` | screenshot → `1280 × 800` |
+| `chat` | `ag/gemini-3.8-flash-high` | `CHAT OK` | screenshot → `1280x800` |
+
+The chat path translates stored Responses items (message / function_call /
+function_call_output) into chat messages and reshapes the upstream delta stream back into
+`response.output_text.delta` + `response.completed`, so `agent/loop.ts` reads one vocabulary
+regardless of provider.

@@ -88,3 +88,150 @@ export function isConfigError(e: unknown): boolean {
     /unauthorized|invalid api key|incorrect api key|401|403/.test(s)
   );
 }
+
+// ---------- chat-completions protocol ----------
+//
+// Some gateways implement /chat/completions but not /responses. The agent loop
+// stores Responses-shaped items (message / function_call / function_call_output),
+// so the translator below is the only place that knows both vocabularies.
+
+type AnyItem = Record<string, any>;
+
+/** Responses items -> chat messages. Images survive as multi-part content. */
+export function toChatMessages(items: AnyItem[]): AnyItem[] {
+  const out: AnyItem[] = [];
+  for (const it of items) {
+    if (it?.type === 'function_call') {
+      const prev = out[out.length - 1];
+      const call = {
+        id: it.call_id ?? it.id ?? `call_${out.length}`,
+        type: 'function',
+        function: { name: it.name, arguments: it.arguments ?? '{}' },
+      };
+      // Merge consecutive calls into one assistant message: some providers reject
+      // a second tool_calls message that arrives before the first is answered.
+      if (prev?.role === 'assistant' && Array.isArray(prev.tool_calls)) prev.tool_calls.push(call);
+      else out.push({ role: 'assistant', content: '', tool_calls: [call] });
+      continue;
+    }
+    if (it?.type === 'function_call_output') {
+      out.push({ role: 'tool', tool_call_id: it.call_id, content: outputText(it.output) });
+      continue;
+    }
+    if (it?.type === 'reasoning' || it?.type === 'compaction') continue;
+    if (it?.type === 'message' || it?.role === 'assistant') {
+      out.push({ role: 'assistant', content: contentText(it.content) });
+      continue;
+    }
+    if (it?.role === 'user') out.push({ role: 'user', content: userContent(it.content) });
+    if (it?.role === 'system') out.push({ role: 'system', content: contentText(it.content) });
+  }
+  return out;
+}
+
+function contentText(content: any): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((c) => c?.text ?? '').filter(Boolean).join('\n');
+}
+
+/** User content may carry screenshots; keep them as image_url parts. */
+function userContent(content: any): any {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts = content
+    .map((c) => {
+      if (c?.type === 'input_image' || c?.type === 'image_url') {
+        const url = c.image_url?.url ?? c.image_url ?? c.url;
+        return url ? { type: 'image_url', image_url: { url } } : null;
+      }
+      const text = c?.text ?? c?.content;
+      return text ? { type: 'text', text } : null;
+    })
+    .filter(Boolean);
+  return parts.length ? parts : '';
+}
+
+/** function_call_output.output is a string or an array of text/image parts. */
+function outputText(output: any): string {
+  if (typeof output === 'string') return output;
+  if (!Array.isArray(output)) return JSON.stringify(output ?? null);
+  const lines = output.map((c) => (c?.type === 'input_image' ? '[image omitted on this protocol]' : c?.text ?? '')).filter(Boolean);
+  return lines.join('\n');
+}
+
+/** Responses function tools -> chat function tools. */
+export function toChatTools(tools: AnyItem[]): AnyItem[] {
+  return stripHosted(tools)
+    .filter((t) => t?.type === 'function' && t.name)
+    .map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+}
+
+/**
+ * A chat-completions stream, reshaped into the events the agent loop already
+ * understands. This is what keeps the loop protocol-agnostic: it keeps reading
+ * response.output_text.delta and never learns that chat exists.
+ */
+export async function* chatAsResponseEvents(stream: AsyncIterable<any>): AsyncGenerator<any> {
+  let text = '';
+  const calls = new Map<number, { id: string; name: string; arguments: string }>();
+  let finish: string | null = null;
+  let usage: any = null;
+
+  for await (const chunk of stream) {
+    const choice = chunk?.choices?.[0];
+    if (chunk?.usage) usage = chunk.usage;
+    if (!choice) continue;
+    const delta = choice.delta ?? {};
+
+    if (typeof delta.content === 'string' && delta.content) {
+      text += delta.content;
+      yield { type: 'response.output_text.delta', delta: delta.content };
+    }
+    for (const tc of delta.tool_calls ?? []) {
+      const idx = Number(tc.index ?? 0);
+      const cur = calls.get(idx) ?? { id: tc.id ?? `call_${idx}`, name: '', arguments: '' };
+      if (tc.id) cur.id = tc.id;
+      if (tc.function?.name) cur.name = tc.function.name;
+      if (tc.function?.arguments) cur.arguments += tc.function.arguments;
+      calls.set(idx, cur);
+    }
+    if (choice.finish_reason) finish = choice.finish_reason;
+  }
+
+  const output: AnyItem[] = [];
+  if (text) {
+    output.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+  }
+  // Emit the completed calls in index order, with their arguments parsed back
+  // into the JSON string the loop already expects.
+  for (const [, c] of [...calls.entries()].sort((a, b) => a[0] - b[0])) {
+    output.push({ type: 'function_call', call_id: c.id, name: c.name, arguments: c.arguments || '{}' });
+    yield { type: 'response.output_item.added', item: { type: 'function_call', name: c.name } };
+  }
+  if (!output.length) throw new Error('model returned no content and no tool calls');
+  yield {
+    type: finish === 'length' ? 'response.incomplete' : 'response.completed',
+    response: {
+      output,
+      usage: usage ? { input_tokens: usage.prompt_tokens ?? usage.input_tokens, output_tokens: usage.completion_tokens ?? usage.output_tokens } : undefined,
+    },
+  };
+}
+
+/** One chat turn. Returns an async iterable of Responses-shaped events. */
+export async function chatStream(body: { input: AnyItem[]; tools: AnyItem[]; signal?: AbortSignal; effort?: string }) {
+  const messages = toChatMessages(body.input);
+  const params: AnyItem = {
+    model: env.llm.model,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+  };
+  const tools = toChatTools(body.tools);
+  if (tools.length) { params.tools = tools; params.tool_choice = 'auto'; }
+  if (body.effort) params.reasoning_effort = body.effort;
+
+  const raw = (await llm().chat.completions.create(params as any, { signal: body.signal })) as unknown as AsyncIterable<any>;
+  return chatAsResponseEvents(raw);
+}
