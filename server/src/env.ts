@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Capability } from './lib/capability-error.js';
 
 // Every optional integration resolves here, once, at boot. Nothing below throws
@@ -78,6 +79,14 @@ export const env = {
     ramGb: Number(process.env.DESKTOP_RAM_GB ?? 8),
     cpu: Number(process.env.DESKTOP_CPU ?? 2),
     resolution: process.env.DESKTOP_RESOLUTION ?? '1280x800x24',
+    /** DESKTOP_MODE=mso: host Xvfb displays, no container runtime. */
+    mso: {
+      root: (process.env.MSO_DESKTOP_ROOT?.trim() || path.join(process.env.HOME ?? '/tmp', '.grokbot', 'desktops')).replace(/\/+$/, ''),
+      /** First VNC port; :99 -> base+0, :91 -> base+1. */
+      vncPortBase: Number(process.env.MSO_VNC_PORT_BASE ?? 5900),
+      /** Explicit browser path; otherwise discovered (Playwright, then PATH). */
+      browser: process.env.GROKBOT_BROWSER?.trim() || '',
+    },
   },
 
   /** Kept for the orgo mode only, so the old path still compiles while it exists. */

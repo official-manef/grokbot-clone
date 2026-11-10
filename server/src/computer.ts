@@ -37,8 +37,12 @@ export function computerState(userId: string): ComputerState {
 
 let workspaceId = env.orgoWorkspaceId;
 async function ensureWorkspace(): Promise<string> {
-  // Only the Orgo backend has a workspace concept; Docker needs none.
-  if (desktopMode() === 'docker') return 'docker';
+  // Only the Orgo backend has a workspace concept. Both local backends must return
+  // BEFORE the Orgo API is called: a missing branch here means every local box
+  // creation fails with "Bot desktop is not configured", which looks like the desktop
+  // itself is broken.
+  const mode = desktopMode();
+  if (mode === 'docker' || mode === 'mso') return mode;
   if (workspaceId) return workspaceId;
   const ws = await orgo.workspaces();
   const list = Array.isArray(ws) ? ws : ws.workspaces ?? ws.projects ?? [];
@@ -91,7 +95,7 @@ export function ensureComputer(userId: string): Promise<string> {
       }
       if (status === 'suspended' || status === 'suspending') {
         const t0 = Date.now();
-        console.log(`[computer] resume user=${userId} computer=${c.id} (was ${c.status}${c.asleep ? `, asleep in ${c.asleep.where}` : ''})`);
+        console.log(`[computer] resume user=${userId} computer=${c.id} (was ${c.status}${c.asleep ? ', asleep' : ''})`);
         setStatus(userId, 'resuming');
         // Let an in-flight suspend settle first; resuming mid-suspend can be rejected.
         for (let i = 0; i < 40 && mapStatus((await box.get(c.id)).status) === 'suspending'; i++) await new Promise((res) => setTimeout(res, 3000));
@@ -137,7 +141,9 @@ async function waitRunning(id: string, timeoutMs = 240_000) {
 /** First-boot setup: a profile dir for per-bot Chrome sessions. */
 async function prepareBox(id: string) {
   try {
-    await box.bash(id, undefined, `mkdir -p ${boxGrokbot()}/profiles ${boxGrokbot()}/files && (which google-chrome || which chromium || which chromium-browser || which firefox) 2>/dev/null`, 60);
+    // Report the browser found, rather than failing: which returns non-zero when none
+    // matches, and that must not turn a usable box into a broken one.
+    await box.bash(id, undefined, `mkdir -p ${boxGrokbot()}/profiles ${boxGrokbot()}/files && { command -v google-chrome || command -v chromium || command -v chromium-browser || command -v firefox || echo 'no system browser'; }`, 60);
   } catch { /* non-fatal */ }
 }
 
