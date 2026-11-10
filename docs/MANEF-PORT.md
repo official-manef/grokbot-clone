@@ -234,3 +234,20 @@ and the wake never happened: `ensureComputer` branched on the backend's raw stat
 same mapping `waitRunning` uses, so both backends go down one path. `POST /computer/ensure` also
 awaits the work instead of answering with the stale row — that staleness is what made the failure
 look like success.
+
+**Restart and viewer.** A container restart reuses `/tmp`, so Xvfb found a stale
+`/tmp/.X99-lock` from the previous run, refused to start, and `wait -n` read that as a dead
+display and shut the box down — every wake. The entrypoint now clears
+`/tmp/.X*-lock` and `/tmp/.X11-unix/X*` before starting displays. Stop/start/stop/start all
+survive, and a screenshot still returns a valid 1280×800 PNG afterwards.
+
+The viewer path was then driven the way the browser drives it — a WebSocket to
+`/api/bots/<id>/screen` with the session cookie:
+
+```
+relay: websocket open
+relay: first frame "RFB 003.008\n"
+OK: RFB handshake reached the browser through the relay
+```
+
+So `vnc.ts` needed only the upstream dial swapped: its RFB handshake code is vendor-neutral.

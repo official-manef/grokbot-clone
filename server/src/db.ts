@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   connected_account_id TEXT,
   created_at INTEGER NOT NULL
 );
+-- orgo_id predates the Docker backend and holds whichever id the active
+-- backend issues: an Orgo computer UUID, or a container name. Renaming it would
+-- be a migration for a cosmetic gain, so it stays and callers go through box.ts.
 CREATE TABLE IF NOT EXISTS computers (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   orgo_id TEXT,

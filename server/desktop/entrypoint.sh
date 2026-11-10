@@ -20,6 +20,12 @@ vnc_port_for() { # 0 -> 6080, n -> 6080+n
 
 echo "[entrypoint] screens=$SCREENS resolution=$RESOLUTION"
 
+# A container restart reuses /tmp, so a lock left by the previous run makes Xvfb
+# refuse to start ("Server is already active for display 99"). The box then read
+# that as a dead display and shut itself down on every wake. Clear the stale
+# locks, which is safe because nothing else can be running this early.
+rm -f /tmp/.X*-lock /tmp/.X11-unix/X* 2>/dev/null || true
+
 X_PIDS=()
 
 for i in $(seq 0 $((SCREENS - 1))); do
