@@ -1,6 +1,6 @@
 # Architecture
 
-grokbot-clone is a web app (`web/`) plus a Node server (`server/`) that runs every Bot's agent loop. The model is Grok 4.7 through the xAI Responses API. Each user's Bots act on one Orgo cloud computer and use apps connected through Composio.
+grokbot-clone is a web app (`web/`) plus a Node server (`server/`) that runs every Bot's agent loop. The model is reached through the xAI Responses API, from xAI itself or any compatible gateway. Each user's Bots act on one computer — local desktops by default, an Orgo cloud VM if configured — and use apps connected through Composio.
 
 ## Components
 
@@ -10,8 +10,8 @@ grokbot-clone is a web app (`web/`) plus a Node server (`server/`) that runs eve
 | Agent loop | `server/src/agent/loop.ts` | Per-Bot serial queue. Each turn builds the system prompt and history, streams `grok-4.7` with function tools plus server-side `web_search`/`x_search`, runs tool calls, and repeats until the model answers |
 | Tools | `server/src/agent/tools.ts` | Computer use (`computer_*`, `open_browser`, `shell`, `save_file`), memory (`remember`/`recall`), routines (cron and app events), tasks, `send_to_bot`, subagents, group chats, `ask_user`, `request_app_connection`, `stay_silent`, plus Composio's meta tools for 1,000+ apps |
 | Memory | `server/src/agent/memory.ts`, `agent/prompt.ts` | Compacts long histories with xAI `POST /v1/responses/compact` (falls back to a summary). Consolidates durable facts after a chat goes idle. Keeps a bounded memory section in the prompt |
-| Computers | `server/src/computer.ts`, `orgo.ts`, `idle.ts` | One Orgo Linux VM per user, with one Orgo *screen* (a separate X display with its own desktop) per Bot, up to 4, leased least-recently-used among idle Bots. Auto-suspends after 20 idle minutes and wakes on the next computer action |
-| Viewer | `server/src/vnc.ts` | WebSocket relay between the browser (noVNC) and Orgo's websockify. The server completes VNC auth upstream, so the VM password, which is root-equivalent, never reaches the browser. It then offers the browser an unauthenticated RFB session. In *watch* mode, keyboard, pointer and clipboard messages are dropped on the server |
+| Computers | `server/src/computer.ts`, `runtime.ts`, `desktop.ts`, `orgo.ts`, `idle.ts` | One box per user, with one *screen* (a separate X display with its own desktop) per Bot, up to 4, leased least-recently-used among idle Bots. `COMPUTER_BACKEND` selects local Xvfb displays (`desktop.ts`, default) or Orgo cloud VMs (`orgo.ts`). Auto-suspends after 20 idle minutes and wakes on the next computer action. See [MSO.md](MSO.md) |
+| Viewer | `server/src/vnc.ts` | WebSocket relay between the browser (noVNC) and the screen's RFB server: loopback `x11vnc` on the local backend, Orgo's websockify on the VM backend. The server completes the upstream handshake, so any VNC password stays server-side. It then offers the browser an unauthenticated RFB session. In *watch* mode, keyboard, pointer and clipboard messages are dropped on the server |
 | Apps | `server/src/composio.ts`, `triggers.ts` | Catalog (`/api/v3.1/toolkits`), per-user sessions, connect links, tool execution, and triggers (realtime subscription) for event routines. Sign-in uses a Composio-managed Gmail connection and reads the profile email |
 | Scheduling | `server/src/routines.ts`, `proactive.ts` | Cron routines (croner), event routines, and proactive check-ins for the primary Bot |
 | Voice | `server/src/voice.ts`, `web/src/voice/*` | Mints short-lived xAI realtime client secrets. The browser connects to `wss://api.x.ai/v1/realtime` directly. A small voice agent relays real work to the Bot's text loop (`send_task`) and speaks the result. Also proxies TTS (preview) and STT (dictation) |
@@ -68,5 +68,6 @@ Secrets live only in `.env` on the server.
 | Service | Used for | Notes |
 |---|---|---|
 | xAI | `grok-4.7` (Responses API), realtime voice, TTS, STT | `prompt_cache_key` per Bot and generation, `safety_identifier` from a hashed user id |
-| Orgo | VMs, screens, actions (screenshot, click, type, key, scroll, drag, bash), VNC, files | Rate limit is about 600 control calls/min per computer. An in-VM executor is the planned next step |
+| Orgo (optional) | VMs, screens, actions (screenshot, click, type, key, scroll, drag, bash), VNC, files | Only with `COMPUTER_BACKEND=orgo`. Rate limit is about 600 control calls/min per computer |
+| Local desktop (default) | Xvfb displays, `xdotool` input, `ffmpeg` capture, loopback `x11vnc` | Provided by `server/scripts/install-desktop-deps.sh`; no root needed. Tradeoffs in [MSO.md](MSO.md) |
 | Composio | Sign-in, connectors, marketplace, triggers | Uses Composio-managed OAuth apps by default. Register your own OAuth clients for production branding |

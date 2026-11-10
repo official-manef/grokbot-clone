@@ -38,7 +38,10 @@ if (fs.existsSync(webDist)) {
   app.get('*', (c) => c.html(fs.readFileSync(path.join(webDist, 'index.html'), 'utf8')));
 }
 
-const server = serve({ fetch: app.fetch, port: env.port }, (info) => console.log(`[grokbot] server on http://localhost:${info.port} (model ${env.xaiModel})`));
+// Bind explicitly to IPv4. Node's default is the IPv6 wildcard, which a Docker bridge
+// peer (Traefik) cannot reach — that looks exactly like a down server and costs an hour.
+const hostname = process.env.HOSTNAME_BIND || '0.0.0.0';
+const server = serve({ fetch: app.fetch, port: env.port, hostname }, (info) => console.log(`[grokbot] server on http://${hostname}:${info.port} (model ${env.xaiModel})`));
 attachVncRelay(server as unknown as Server);
 // GROKBOT_NO_SCHEDULER=1 for extra dev/test servers sharing a database copy, so routines and triggers don't fire twice.
 if (process.env.GROKBOT_NO_SCHEDULER !== '1') {

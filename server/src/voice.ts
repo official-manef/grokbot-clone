@@ -15,7 +15,7 @@ import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, Vo
 
 export const voiceApi = new Hono<AuthVars>();
 
-const XAI = 'https://api.x.ai/v1';
+const XAI = env.xaiBaseUrl;
 const VOICE_MODEL = process.env.XAI_VOICE_MODEL ?? 'grok-voice-latest';
 const STT_MODEL = process.env.XAI_STT_MODEL ?? 'grok-voice-transcribe-2.0';
 const SAMPLE_RATE = 24000;
@@ -280,7 +280,7 @@ voiceApi.post('/session', async (c) => {
     clientSecret: secret.value,
     expiresAt: secret.expires_at,
     model: VOICE_MODEL,
-    websocketUrl: `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
+    websocketUrl: `${env.xaiBaseUrl.replace(/^http/, 'ws')}/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
     sampleRate: SAMPLE_RATE,
     instructions,
     voice: s.voice,

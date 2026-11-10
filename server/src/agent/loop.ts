@@ -11,7 +11,14 @@ import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
 import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
 
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 360_000 });
+/**
+ * The model client. `env.xaiBaseUrl` defaults to xAI and can point at any gateway that
+ * implements the Responses API, which is what this loop is written against.
+ */
+const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: env.xaiBaseUrl, timeout: 360_000 });
+
+/** Hosted tools (web_search/x_search) are xAI-only; drop them on gateways that reject them. */
+const hostedTools = () => (env.enableHostedSearch ? [{ type: 'web_search' }, { type: 'x_search' }] : []);
 
 export type Trigger =
   | { type: 'user'; text: string }
@@ -130,8 +137,7 @@ async function runTurn(botId: string, trigger: Trigger) {
     const tools = [
       ...functionSchemas(),
       ...(await composioTools(userId)),
-      { type: 'web_search' },
-      { type: 'x_search' },
+      ...hostedTools(),
     ];
 
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -275,11 +281,15 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
   try {
     stream = await xai.responses.create(body, { signal });
   } catch (e: any) {
-    // If a Composio tool schema is rejected, retry with only our own tools.
-    if (e?.status === 400 && tools.length > functionSchemas().length + 2) {
-      console.warn('[agent] 400 with composio tools, retrying without:', e?.message);
-      body.tools = [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }];
-      stream = await xai.responses.create(body, { signal });
+    // A gateway may reject a tool kind it does not implement. Retry with our own
+    // function tools only, then (if even those are refused) with no hosted tools at all.
+    if (e?.status === 400) {
+      const own = [...functionSchemas()];
+      if (tools.length > own.length) {
+        console.warn('[agent] 400 with extra tools, retrying with function tools only:', e?.message);
+        body.tools = own;
+        try { stream = await xai.responses.create(body, { signal }); } catch (e2: any) { throw e2; }
+      } else throw e;
     } else throw e;
   }
 

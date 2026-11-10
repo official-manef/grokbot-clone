@@ -1,12 +1,17 @@
 import { Hono } from 'hono';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { db, now } from './db.js';
+
+const fsStat = fsp.stat;
 import './db-config.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { requireUser, type AuthVars } from './lib/auth.js';
 import { getBotRow, listRoutines, listTasks } from './store.js';
 import { computerState, ensureComputer } from './computer.js';
-import { orgo } from './orgo.js';
+import { runtime as orgo, runtimeIsLocal, profileDirFor, libraryDirFor } from './runtime.js';
 import { runInBotQueue } from './agent/loop.js';
 import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent/memory.js';
 import { idleConfig, viewerCount } from './idle.js';
@@ -129,7 +134,9 @@ configApi.post('/bots/:id/compact', async (c) => {
 
 // ---------- library: files under /root/grokbot/files/<botId> on the bot's computer ----------
 
-const LIB_ROOT = '/root/grokbot/files';
+/** Library root for the active backend (per-bot directory lives under it). */
+const libRoot = () => (runtimeIsLocal ? path.dirname(libraryDirFor('x')) : '/root/grokbot/files');
+const botLibDir = (botId: string) => (runtimeIsLocal ? libraryDirFor(botId) : `${'/root/grokbot/files'}/${botId}`);
 
 function safeRel(p: string | undefined): string | null {
   const rel = (p ?? '').replace(/^\/+|\/+$/g, '');
@@ -174,8 +181,9 @@ configApi.get('/bots/:id/files', async (c) => {
   try {
     const box = await boxFor(user.id, b.id, c.req.query('wake') === '1');
     if (!box) return c.json({ status: 'asleep', path: rel, files: [] });
-    const dir = `${LIB_ROOT}/${b.id}${rel ? `/${rel}` : ''}`;
-    const r = await orgo.bash(box.computerId, box.screenId, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
+    const base = botLibDir(b.id);
+    const dir = `${base}${rel ? `/${rel}` : ''}`;
+    const r = await orgo.bash(box.computerId, box.screenId, `mkdir -p ${shq(base)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
     if (r.exit_code !== 0) return c.json({ status: 'error', path: rel, files: [], error: (r.output ?? '').slice(0, 300) });
     return c.json({ status: 'ok', path: rel, files: parseLs(r.output ?? '') });
   } catch (e: any) {
@@ -193,12 +201,47 @@ configApi.post('/bots/:id/files/download', async (c) => {
   try {
     const box = await boxFor(user.id, b.id, true);
     if (!box) return c.json({ error: 'computer unavailable' }, 409);
-    const r: any = await orgo.exportFile(box.computerId, `${LIB_ROOT}/${b.id}/${rel}`);
+    if (runtimeIsLocal) {
+      // The file is already on this host: hand back a same-origin authenticated stream
+      // instead of manufacturing a signed URL for storage we do not have.
+      return c.json({ url: `/api/bots/${encodeURIComponent(b.id)}/files/raw?path=${encodeURIComponent(rel)}` });
+    }
+    const r: any = await orgo.exportFile(box.computerId, `${botLibDir(b.id)}/${rel}`);
     const url = r?.url ?? r?.file?.url ?? r?.download_url;
     if (!url) return c.json({ error: 'export returned no link' }, 502);
     return c.json({ url });
   } catch (e: any) {
     return c.json({ error: String(e?.message ?? e).slice(0, 300) }, 502);
+  }
+});
+
+/**
+ * Stream a saved Library file. Only the local backend needs this (see the download
+ * handler above): the bytes never leave this host, so there is no signed URL to mint.
+ */
+configApi.get('/bots/:id/files/raw', async (c) => {
+  const user = c.get('user');
+  const b = ownBot(user.id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const rel = safeRel(c.req.query('path'));
+  if (!rel) return c.json({ error: 'bad path' }, 400);
+  const base = botLibDir(b.id);
+  const abs = path.resolve(base, rel);
+  // safeRel already rejects traversal, but resolve again: a symlink inside the library
+  // must not be able to walk out of it.
+  if (abs !== base && !abs.startsWith(`${base}${path.sep}`)) return c.json({ error: 'bad path' }, 400);
+  try {
+    const stat = await fsStat(abs);
+    if (!stat.isFile()) return c.json({ error: 'not a file' }, 400);
+    const stream = fs.createReadStream(abs);
+    return c.body(stream as any, 200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(stat.size),
+      'Content-Disposition': `attachment; filename="${path.basename(abs).replace(/["\\]/g, '_')}"`,
+      'Cache-Control': 'private, no-store',
+    });
+  } catch {
+    return c.json({ error: 'not found' }, 404);
   }
 });
 
@@ -223,7 +266,7 @@ configApi.post('/bots/:id/screen/reset', async (c) => {
   if (!lease) return c.json({ ok: true, note: 'no screen yet' });
   const comp = db.prepare("SELECT orgo_id FROM computers WHERE user_id=? AND status='running'").get(user.id) as any;
   if (!comp?.orgo_id) return c.json({ error: 'Wake the computer first' }, 409);
-  const profile = `/root/grokbot/profiles/${b.id}`;
+  const profile = profileDirFor(b.id);
   try {
     await orgo.bash(comp.orgo_id, undefined, `pkill -f ${shq(`user-data-dir=${profile}`)}; rm -f ${shq(profile)}/Singleton*; echo ok`, 30).catch(() => null);
     if (lease.screen_id !== 'default') {

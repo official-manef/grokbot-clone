@@ -1,0 +1,27 @@
+# grok.antinrml.com -> grokbot-clone server on the host (port 8787).
+# Mirrors mso.yml: the app is a systemd/host process, not a container, so the backend
+# is the docker_gwbridge gateway address.
+http:
+  routers:
+    grok-app-web:
+      rule: Host(`grok.antinrml.com`)
+      service: grok-app
+      entryPoints:
+        - web
+      middlewares:
+        - redirect-to-https
+    grok-app-websecure:
+      rule: Host(`grok.antinrml.com`)
+      service: grok-app
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+  services:
+    grok-app:
+      loadBalancer:
+        # The app compares Origin against Host for websocket upgrades (the noVNC relay),
+        # so the public Host header must survive the hop.
+        passHostHeader: true
+        servers:
+          - url: http://172.30.1.1:4000

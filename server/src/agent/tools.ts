@@ -1,7 +1,8 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { orgo } from '../orgo.js';
+import { runtime as orgo, runtimeIsLocal, profileDirFor, libraryDirFor } from '../runtime.js';
+import { browserBinary, displayFor } from '../desktop.js';
 import { screenFor } from '../computer.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
@@ -139,16 +140,20 @@ export const TOOLS: ToolDef[] = [
     label: 'Browsing a site',
     impl: async (a, ctx) => {
       const url = String(a.url).replace(/'/g, '%27');
+      const browser = browserBinary();
+      if (!browser) {
+        return { output: '[No browser is installed on this computer, so the page could not be opened. Report this to the user instead of retrying.]', summary: 'No browser available' };
+      }
       await onScreen(ctx, (c, s) => {
-        const display = s === 'default' ? ':99' : `:${s.replace('screen-', '')}`;
-        const profile = `/root/grokbot/profiles/${ctx.botId}`;
-        // Reuse the bot's running Chrome if present (opens a new tab), else start one detached.
+        const display = displayFor(s);
+        const profile = profileDirFor(ctx.botId);
+        // Reuse the bot's running browser if present (opens a new tab), else start one detached.
         return orgo.bash(
           c,
           s,
-          `export DISPLAY=${display}; mkdir -p ${profile}; pgrep -f "user-data-dir=${profile}" >/dev/null || rm -f ${profile}/Singleton*; ` +
-            `setsid nohup google-chrome --no-sandbox --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=basic ` +
-            `--user-data-dir=${profile} --start-maximized '${url}' >/tmp/chrome-${ctx.botId}.log 2>&1 < /dev/null & sleep 4; echo ok`,
+          `export DISPLAY=${display}; mkdir -p '${profile}'; pgrep -f "user-data-dir=${profile}" >/dev/null || rm -f '${profile}'/Singleton*; ` +
+            `setsid nohup '${browser}' --no-sandbox --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=basic ` +
+            `--user-data-dir='${profile}' --start-maximized '${url}' >/tmp/chrome-${ctx.botId}.log 2>&1 < /dev/null & sleep 4; echo ok`,
           40,
         );
       });
@@ -157,13 +162,13 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'save_file',
-    description: "Save a deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under /root/grokbot/files/<your id>/ on your computer.",
+    description: "Save a deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under your own files directory on your computer.",
     parameters: obj({ filename: { type: 'string', description: 'e.g. briefing-2026-11-09.md' }, content: { type: 'string' } }, ['filename', 'content']),
     activity: 'drafting_file',
     label: 'Saving notes',
     impl: async (a, ctx) => {
       const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
-      const dir = `/root/grokbot/files/${ctx.botId}`;
+      const dir = libraryDirFor(ctx.botId);
       const b64 = Buffer.from(String(a.content), 'utf8').toString('base64');
       // Chunk the base64 so very large files don't exceed a single command's size.
       await onScreen(ctx, async (c, s) => {

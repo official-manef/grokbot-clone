@@ -4,7 +4,17 @@ import { db } from './db.js';
 import { env } from './env.js';
 import type { Toolkit } from './types.js';
 
-export const composio = new Composio({ apiKey: env.composioKey, provider: new OpenAIResponsesProvider() });
+/**
+ * Composio powers app connections and Google sign-in. It is optional: without a key the
+ * server boots and runs, and the app-connection UI reports itself as unconfigured rather
+ * than the whole product refusing to start.
+ */
+export const composio = new Composio({ apiKey: env.composioKey || 'unconfigured', provider: new OpenAIResponsesProvider() });
+
+/** Guard for every call site that reaches the network. */
+export function requireComposio(): void {
+  if (!env.composioEnabled) throw new Error('Composio is not configured (set COMPOSIO_API_KEY to enable app connections)');
+}
 
 const REST = 'https://backend.composio.dev/api/v3.1';
 async function rest<T = any>(path: string): Promise<T> {
@@ -19,6 +29,7 @@ type CatalogItem = Omit<Toolkit, 'connected'>;
 let catalogCache: { at: number; items: CatalogItem[] } | null = null;
 
 export async function catalog(): Promise<CatalogItem[]> {
+  if (!env.composioEnabled) return [];
   if (catalogCache && Date.now() - catalogCache.at < 3600_000) return catalogCache.items;
   const items: CatalogItem[] = [];
   let cursor: string | undefined;
@@ -49,12 +60,14 @@ export async function toolkitInfo(slug: string): Promise<CatalogItem | undefined
 // ---------- per-user connections ----------
 
 export async function connectedToolkits(userId: string): Promise<Set<string>> {
+  if (!env.composioEnabled) return new Set();
   const r = await composio.connectedAccounts.list({ userIds: [userId], statuses: ['ACTIVE'] } as any);
   const items: any[] = (r as any).items ?? [];
   return new Set(items.map((i) => i.toolkit?.slug ?? i.toolkitSlug).filter(Boolean));
 }
 
 export async function connectionsDetail(userId: string) {
+  if (!env.composioEnabled) return [];
   const r = await composio.connectedAccounts.list({ userIds: [userId] } as any);
   return ((r as any).items ?? []).map((i: any) => ({ id: i.id, toolkit: i.toolkit?.slug ?? i.toolkitSlug, status: i.status }));
 }
@@ -71,6 +84,7 @@ export async function disconnect(userId: string, toolkit: string) {
 const sessionCache = new Map<string, any>();
 
 export async function sessionFor(userId: string): Promise<any> {
+  requireComposio();
   const cached = sessionCache.get(userId);
   if (cached) return cached;
   const row = db.prepare('SELECT session_id FROM composio_sessions WHERE user_id=?').get(userId) as any;
@@ -127,6 +141,7 @@ export const isReadOnlySlug = (slug: string) => READ_RE.test(slug.toUpperCase())
 // ---------- sign-in via Composio-managed Google (Gmail) connection ----------
 
 export async function startGoogleLogin(provisionalUserId: string, callbackUrl: string) {
+  requireComposio();
   const session = await composio.create(provisionalUserId, { manageConnections: false } as any);
   const req = await (session as any).authorize('gmail', { callbackUrl });
   return { redirectUrl: req.redirectUrl as string, connectedAccountId: req.id as string | undefined };

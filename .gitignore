@@ -15,3 +15,13 @@ docs/INTERNAL-*.md
 docs/SPEC.md
 web/screenshots/
 tests/out/
+
+# Vendored desktop binaries (downloaded by server/scripts/install-desktop-deps.sh).
+# Committing .deb contents would bloat the repo; the script recreates them.
+server/vendor/
+
+# Per-bot desktops: browser profiles, cookies and saved files. Never in git.
+.grokbot/
+
+# Convex regenerates these on every deploy.
+convex/_generated/

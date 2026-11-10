@@ -1,0 +1,44 @@
+[Unit]
+Description=Grokbot — self-hosted Grok Bot clone (MSO computer backend)
+Documentation=https://grok.antinrml.com
+After=network-online.target mso.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User units already run as the owning user; setting Group= makes systemd attempt a
+# supplementary-group change it is not permitted to do, and the unit fails 216/GROUP.
+WorkingDirectory=/home/antinrml/projects/grokbot-clone/.worktrees/feat/mso-runtime
+
+# The app reads .env itself via `node --env-file`. Do not paste secrets into this unit:
+# unit files are world-readable, .env is 0600.
+Environment=NODE_ENV=production
+
+# Bind on IPv4 explicitly; Traefik reaches the host over docker_gwbridge and cannot
+# route to an IPv6-only wildcard listener.
+Environment=HOSTNAME_BIND=0.0.0.0
+
+ExecStart=/usr/bin/node --env-file=.env server/dist/index.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Desktops are long-lived child processes owned by this service's lifetime.
+KillMode=mixed
+
+# Keep logs where journalctl can find them, with a stable identifier.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=grokbot
+
+# Hardening that a *user* unit can actually apply. Directives like NoNewPrivileges=,
+# ProtectSystem= and Restrict* either need root or fail cap-drop with 218/CAPABILITIES
+# here, which turns a working service into a restart loop. The real isolation for this
+# app is the per-bot desktop directory, not the unit sandbox; see docs/MSO.md.
+PrivateTmp=no
+
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target

@@ -4,7 +4,7 @@
 
 <p align="center">
   A self-hosted Grok Bot clone with computer use, connected apps, memory, and voice.<br>
-  Built with the public Grok API, Orgo, and Composio.
+  Built with an OpenAI-compatible model API, a local desktop runtime, and Composio.
 </p>
 
 <p align="center">
@@ -24,14 +24,14 @@ Grokbot Clone recreates the Grok Bot experience with a runtime you can run and m
 ## What you can do
 
 - **Give every Bot a role.** Set its instructions, appearance, thinking effort, skills, and memories. Make one your primary point of contact.
-- **Put it to work on a computer.** Bots browse websites, run shell commands, and use a full Linux desktop through Orgo. Watch live, take control, and find saved work in the Library.
+- **Put it to work on a computer.** Bots browse websites, run shell commands, and use a full Linux desktop. Watch live, take control, and find saved work in the Library.
 - **Connect your apps.** Google sign-in and app connections run through Composio. Read actions run automatically; Composio write actions pause for approval, with an option to remember your choice.
 - **Build a team.** Bots delegate work, start subagents, and join group chats with @mentions.
 - **Keep work moving.** Schedule routines, react to app events, and let your primary Bot check in proactively.
 - **Keep context.** Bots retain durable memories, recall earlier facts, and compact long conversations.
 - **Talk it through.** Realtime voice calls hand tasks to the same Bot runtime. Voice selection, speed, previews, and push-to-talk dictation are included.
 
-Each user's Bots share one Orgo VM, with up to four separate Bot desktops active at once. Idle computers can sleep and wake when needed.
+Each user's Bots share one box, with up to four separate Bot desktops active at once. Idle computers can sleep and wake when needed. The backend is swappable: `COMPUTER_BACKEND=mso` (default) runs the desktops on this host, `orgo` uses cloud VMs. See [the MSO backend guide](docs/MSO.md).
 
 ## Quick start
 
@@ -54,8 +54,9 @@ Fill in these values in `.env`:
 | --- | --- |
 | `XAI_API_KEY` | Grok text and voice API access |
 | `COMPOSIO_API_KEY` | App connections, tool catalog, and Google sign-in |
-| `ORGO_API_KEY` | Cloud computer access |
-| `ORGO_WORKSPACE_ID` | Workspace in which to create computers |
+| `COMPUTER_BACKEND` | `mso` (local desktops, default) or `orgo` (cloud VMs) |
+| `ORGO_API_KEY` | Cloud computer access (only with `COMPUTER_BACKEND=orgo`) |
+| `ORGO_WORKSPACE_ID` | Workspace in which to create computers (only with `orgo`) |
 | `SESSION_SECRET` | Secret used to sign sessions |
 
 Generate a session secret with:
@@ -84,7 +85,7 @@ Open **[localhost:5173](http://localhost:5173)**. The frontend proxies API reque
 
 Use **Sign in with Google**, or use the local email form with `DEV_LOGIN=1` (enabled in `.env.example`). Your account starts with a primary Bot. Create another Bot, give it a role, and send it a task.
 
-The first computer task provisions an Orgo VM. Model calls, app actions, and computers use your provider accounts and may incur charges.
+The first computer task starts a desktop on this host (or provisions a VM, with the Orgo backend). Model calls and app actions use your provider accounts and may incur charges.
 
 ### Run a built version
 
@@ -102,13 +103,13 @@ The API serves the built app at **[localhost:8787](http://localhost:8787)**. Set
 | Web app | React, TypeScript, Vite, and Zustand |
 | Server | Node.js, Hono, SQLite, and Server-Sent Events |
 | Agent runtime | Grok Responses API with streaming, tools, memory, and approval handling |
-| Computers | Orgo VM lifecycle and per-Bot desktops; noVNC viewer through a server-side relay |
+| Computers | Per-Bot desktops via `server/src/runtime.ts` (`desktop.ts` locally, `orgo.ts` for VMs); noVNC viewer through a server-side relay |
 | Connected apps | Composio catalog, sessions, authentication, tools, and triggers |
 | Voice | Grok realtime sessions with a relay into the text agent's task loop |
 
 The server owns the agent loop. It builds context, streams a model response, executes tools, pauses for approvals when required, and continues until the task is done. Voice hands work to that same loop.
 
-For the details, read the [architecture guide](docs/ARCHITECTURE.md), [Orgo integration guide](docs/orgo-builder-guide.md), and [Grok and Composio integration guide](docs/xai-and-composio.md).
+For the details, read the [architecture guide](docs/ARCHITECTURE.md), [the local desktop backend guide](docs/MSO.md), [Orgo integration guide](docs/orgo-builder-guide.md), and [Grok and Composio integration guide](docs/xai-and-composio.md).
 
 ## Development
 
@@ -158,4 +159,4 @@ Configuration options for idle suspension, memory consolidation, and history com
 
 Project code is available under the [MIT license](LICENSE). Third-party artwork and trademarks retain their owners' rights; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
-Inspired by Grok Bot. Built with [Grok](https://x.ai), [Orgo](https://orgo.ai), and [Composio](https://composio.dev). This is an independent project, unaffiliated with xAI or Cursor/Anysphere.
+Inspired by Grok Bot. Built with [Grok](https://x.ai), [MSO](https://github.com/rahmanef63/mso), [Orgo](https://orgo.ai), and [Composio](https://composio.dev). This is an independent project, unaffiliated with xAI or Cursor/Anysphere.
