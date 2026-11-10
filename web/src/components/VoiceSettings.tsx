@@ -3,6 +3,7 @@ import type { Bot } from '@shared/types';
 import { useStore } from '../store';
 import { voiceApi, type VoiceOptions } from '../voice/api';
 import { endCall, isCallActive, previewVoice, startCall, useVoice } from '../voice/call';
+import { gapReason, useCapability } from '../lib/capabilities';
 import { Icon } from './Icon';
 
 const FALLBACK: VoiceOptions = {
@@ -39,6 +40,8 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
+  const canPreview = useCapability('tts');
+  const canCall = useCapability('realtime');
 
   useEffect(() => { voiceApi.options().then(setOpts).catch(() => {}); }, []);
   useEffect(() => setError(null), [bot.id]);
@@ -73,7 +76,13 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
       <div className="panel-row panel-row--setting">
         <span>Voice</span>
         <span className="voice-setting__right">
-          <button type="button" className="voice-preview" onClick={preview} disabled={previewing} title={`Hear ${bot.name}'s voice`}>{previewing ? 'Playing…' : 'Preview'}</button>
+          <button
+            type="button"
+            className="voice-preview"
+            onClick={preview}
+            disabled={previewing || !canPreview}
+            title={canPreview ? `Hear ${bot.name}'s voice` : gapReason('tts')}
+          >{previewing ? 'Playing…' : 'Preview'}</button>
           <NativeSelect label="Voice" value={bot.voice} options={voices.map((v) => ({ value: v.id, label: v.name }))} onChange={(voice) => save({ voice })} />
         </span>
       </div>
@@ -85,9 +94,16 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
         <span>Language</span>
         <NativeSelect label="Language" value={bot.voiceLanguage} options={opts.languages.map((l) => ({ value: l.code, label: l.name }))} onChange={(voiceLanguage) => save({ voiceLanguage })} />
       </div>
-      <button type="button" className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`} onClick={() => (inCall ? endCall() : startCall(bot.id))}>
-        <Icon name="voice_a" size={14} opacity={inCall ? 1 : 0.56} /> {inCall ? 'End voice chat' : 'Start voice chat'}
+      <button
+        type="button"
+        className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`}
+        onClick={() => (inCall ? endCall() : startCall(bot.id))}
+        disabled={!canCall && !inCall}
+        title={canCall ? undefined : gapReason('realtime')}
+      >
+        <Icon name="voice_a" size={14} opacity={inCall ? 1 : 0.56} /> {inCall ? 'End voice chat' : canCall ? 'Start voice chat' : 'Voice chat unavailable'}
       </button>
+      {!canCall && <div className="voice-error voice-error--muted">{gapReason('realtime')}</div>}
       {error && <div className="voice-error">{error}</div>}
     </div>
   );

@@ -6,12 +6,11 @@ import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getRow, loadHistory, setLive, updateRow } from '../store.js';
 import type { MessageBody, ToolCallBody } from '../types.js';
 import { composioTools, toolkitInfo } from '../composio.js';
+import { llm, model, hostedTools, stripHosted, describeLLMError, llmConfigured } from '../providers/llm.js';
 import { systemPrompt } from './prompt.js';
 import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
 import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
-
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 360_000 });
 
 export type Trigger =
   | { type: 'user'; text: string }
@@ -130,8 +129,7 @@ async function runTurn(botId: string, trigger: Trigger) {
     const tools = [
       ...functionSchemas(),
       ...(await composioTools(userId)),
-      { type: 'web_search' },
-      { type: 'x_search' },
+      ...(hostedTools() ? [{ type: 'web_search' }, { type: 'x_search' }] : []),
     ];
 
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -260,7 +258,7 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
   const input = [{ role: 'system', content: await systemPrompt(userId, botId) }, ...pruneImages(repairHistory(history))];
 
   const body: any = {
-    model: env.xaiModel,
+    model: model(),
     input,
     tools,
     reasoning: { effort: bot.effort ?? 'medium' },
@@ -270,16 +268,24 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
     safety_identifier: sha256(userId).slice(0, 32),
     stream: true,
   };
+  // A gateway that is not the vendor rejects hosted tool types and vendor-only
+  // request fields. Drop them before sending, so the 400 is a real 400.
+  if (!hostedTools()) {
+    body.tools = stripHosted(tools);
+    delete body.include;
+    delete body.prompt_cache_key;
+    delete body.safety_identifier;
+  }
 
   let stream: any;
   try {
-    stream = await xai.responses.create(body, { signal });
+    stream = await llm().responses.create(body, { signal });
   } catch (e: any) {
     // If a Composio tool schema is rejected, retry with only our own tools.
     if (e?.status === 400 && tools.length > functionSchemas().length + 2) {
-      console.warn('[agent] 400 with composio tools, retrying without:', e?.message);
-      body.tools = [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }];
-      stream = await xai.responses.create(body, { signal });
+      console.warn('[agent] 400 with composio tools, retrying without:', describeLLMError(e));
+      body.tools = hostedTools() ? [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }] : functionSchemas();
+      stream = await llm().responses.create(body, { signal });
     } else throw e;
   }
 

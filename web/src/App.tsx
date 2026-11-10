@@ -11,6 +11,7 @@ import { CreateBotModal } from './components/modals/CreateBotModal';
 import { CreateGroupModal } from './components/modals/CreateGroupModal';
 import { SearchModal } from './components/modals/SearchModal';
 import { ConfigLayer } from './components/config/ConfigLayer';
+import { CapabilityNotice } from './components/CapabilityNotice';
 import { TasksView } from './components/config/TasksView';
 import { useConfigUI } from './configStore';
 
@@ -56,6 +57,7 @@ function Shell() {
 
   return (
     <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${detailsOpen && hasBot && view === 'chat' ? ' has-details' : ''}`}>
+      <CapabilityNotice />
       <Sidebar />
       {view === 'tasks' ? <TasksView /> : <ChatView />}
       {detailsOpen && hasBot && view === 'chat' && <DetailsPanel />}

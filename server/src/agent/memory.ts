@@ -1,10 +1,9 @@
-import OpenAI from 'openai';
 import { db, now } from '../db.js';
 import '../db-config.js';
-import { env } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { getBotRow, getLive } from '../store.js';
+import { llm, model } from '../providers/llm.js';
 
 /**
  * Memory over time:
@@ -12,8 +11,6 @@ import { getBotRow, getLive } from '../store.js';
  *  (b) consolidation of durable facts into `memories` after a conversation goes idle,
  *  (c) a bounded, relevance-ranked memory section for the system prompt.
  */
-
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 300_000 });
 
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
 
@@ -153,7 +150,7 @@ export function renderTranscript(items: any[], maxChars = 200_000): string {
 }
 
 async function compactWithXai(old: any[]): Promise<any[]> {
-  const res: any = await xai.post('/responses/compact', { body: { model: env.xaiModel, input: old } });
+  const res: any = await llm().post('/responses/compact', { body: { model: model(), input: old } });
   const out = (res?.output ?? []) as any[];
   if (!out.length || !out.some((o) => o?.type === 'compaction' || o?.encrypted_content || o?.role)) throw new Error('compact returned no items');
   return out;
@@ -161,8 +158,8 @@ async function compactWithXai(old: any[]): Promise<any[]> {
 
 async function compactWithSummary(old: any[]): Promise<any[]> {
   const transcript = renderTranscript(old);
-  const res: any = await xai.responses.create({
-    model: env.xaiModel,
+  const res: any = await llm().responses.create({
+    model: model(),
     input: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
     store: false,
     reasoning: { effort: 'low' },
@@ -201,7 +198,7 @@ export async function maybeCompact(botId: string, items: any[], opts: { force?: 
 
   const bot = getBotRow(botId);
   const t0 = Date.now();
-  let method = 'xai-compact';
+  let method = 'server-compact';
   let replaced: any[];
   try {
     if (memoryConfig.compactMethod === 'summary') throw new Error('xAI compaction disabled by GROKBOT_COMPACT_METHOD=summary');
@@ -296,8 +293,8 @@ export async function consolidateBot(botId: string, opts: { upTo?: number } = {}
   if (transcript.length > 24_000) transcript = transcript.slice(-24_000);
 
   const existing = (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at DESC LIMIT 200').all(botId) as any[]).map((m) => m.text as string);
-  const res: any = await xai.responses.create({
-    model: env.xaiModel,
+  const res: any = await llm().responses.create({
+    model: model(),
     input: [
       { role: 'system', content: CONSOLIDATE_PROMPT },
       { role: 'user', content: `EXISTING MEMORIES:\n${existing.length ? existing.map((t) => `- ${t}`).join('\n') : '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` },

@@ -1,6 +1,12 @@
 import { env } from './env.js';
+import { CapabilityError } from './lib/capability-error.js';
 
 const BASE = 'https://www.orgo.ai/api';
+
+/** Callers reach this module only when DESKTOP_MODE=orgo; fail cleanly otherwise. */
+function ensureOrgo() {
+  if (!env.orgo.key) throw new CapabilityError('desktop');
+}
 
 export class OrgoError extends Error {
   constructor(public status: number, public code: string | undefined, message: string, public body?: unknown) {
@@ -9,6 +15,7 @@ export class OrgoError extends Error {
 }
 
 async function call<T = any>(method: string, path: string, body?: unknown, opts: { timeoutMs?: number; headers?: Record<string, string> } = {}): Promise<T> {
+  ensureOrgo();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 120_000);
   try {

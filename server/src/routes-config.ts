@@ -6,7 +6,7 @@ import { hub } from './lib/hub.js';
 import { requireUser, type AuthVars } from './lib/auth.js';
 import { getBotRow, listRoutines, listTasks } from './store.js';
 import { computerState, ensureComputer } from './computer.js';
-import { orgo } from './orgo.js';
+import { box as desktopBackend } from './box.js';
 import { runInBotQueue } from './agent/loop.js';
 import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent/memory.js';
 import { idleConfig, viewerCount } from './idle.js';
@@ -172,10 +172,10 @@ configApi.get('/bots/:id/files', async (c) => {
   const rel = safeRel(c.req.query('path'));
   if (rel === null) return c.json({ error: 'bad path' }, 400);
   try {
-    const box = await boxFor(user.id, b.id, c.req.query('wake') === '1');
-    if (!box) return c.json({ status: 'asleep', path: rel, files: [] });
+    const lease = await boxFor(user.id, b.id, c.req.query('wake') === '1');
+    if (!lease) return c.json({ status: 'asleep', path: rel, files: [] });
     const dir = `${LIB_ROOT}/${b.id}${rel ? `/${rel}` : ''}`;
-    const r = await orgo.bash(box.computerId, box.screenId, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
+    const r = await desktopBackend.bash(lease.computerId, lease.screenId, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
     if (r.exit_code !== 0) return c.json({ status: 'error', path: rel, files: [], error: (r.output ?? '').slice(0, 300) });
     return c.json({ status: 'ok', path: rel, files: parseLs(r.output ?? '') });
   } catch (e: any) {
@@ -191,9 +191,9 @@ configApi.post('/bots/:id/files/download', async (c) => {
   const rel = safeRel(path);
   if (!rel) return c.json({ error: 'bad path' }, 400);
   try {
-    const box = await boxFor(user.id, b.id, true);
-    if (!box) return c.json({ error: 'computer unavailable' }, 409);
-    const r: any = await orgo.exportFile(box.computerId, `${LIB_ROOT}/${b.id}/${rel}`);
+    const lease = await boxFor(user.id, b.id, true);
+    if (!lease) return c.json({ error: 'computer unavailable' }, 409);
+    const r: any = await desktopBackend.exportFile(lease.computerId, `${LIB_ROOT}/${b.id}/${rel}`);
     const url = r?.url ?? r?.file?.url ?? r?.download_url;
     if (!url) return c.json({ error: 'export returned no link' }, 502);
     return c.json({ url });
@@ -225,9 +225,9 @@ configApi.post('/bots/:id/screen/reset', async (c) => {
   if (!comp?.orgo_id) return c.json({ error: 'Wake the computer first' }, 409);
   const profile = `/root/grokbot/profiles/${b.id}`;
   try {
-    await orgo.bash(comp.orgo_id, undefined, `pkill -f ${shq(`user-data-dir=${profile}`)}; rm -f ${shq(profile)}/Singleton*; echo ok`, 30).catch(() => null);
+    await desktopBackend.bash(comp.orgo_id, undefined, `pkill -f ${shq(`user-data-dir=${profile}`)}; rm -f ${shq(profile)}/Singleton*; echo ok`, 30).catch(() => null);
     if (lease.screen_id !== 'default') {
-      await orgo.deleteScreen(comp.orgo_id, lease.screen_id).catch((e) => console.warn('[computer] delete screen', e?.message));
+      await desktopBackend.deleteScreen(comp.orgo_id, lease.screen_id).catch((e) => console.warn('[computer] delete screen', e?.message));
       db.prepare('DELETE FROM screens WHERE bot_id=?').run(b.id);
     }
     console.log(`[computer] reset screen ${lease.screen_id} for bot ${b.id}`);

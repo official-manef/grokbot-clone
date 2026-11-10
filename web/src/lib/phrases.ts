@@ -23,6 +23,7 @@ const PHRASES: Record<string, string[]> = {
   waiting_for_you: ['Needs your input'],
   checking_usage: ['Checking your usage'],
   remembering: ['Making a note of it'],
+  generating_image: ['Sketching something up'],
 };
 
 const nice = (s?: string) => !!s && !/[_]/.test(s) && !/^[a-z0-9-]+$/.test(s);

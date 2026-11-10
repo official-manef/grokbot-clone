@@ -120,3 +120,28 @@ a { color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* A deployment that is missing keys says so once, at the top, instead of
+   failing a click. Muted by default; red only when the model itself is absent. */
+.capability-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-muted, #8b8f98);
+  background: var(--surface-raised, #17181b);
+  border-bottom: 1px solid var(--border-subtle, #26282d);
+}
+.capability-notice strong { color: var(--text, #e7e8ea); font-weight: 550; }
+.capability-notice code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--surface-sunken, #101114);
+}
+.capability-notice--error { color: #e8b4a6; border-bottom-color: #4a2f28; }
