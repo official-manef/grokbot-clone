@@ -29,8 +29,10 @@ RUN useradd -m -s /bin/bash -u 1000 bot \
  && mkdir -p /home/bot/grokbot/profiles /home/bot/grokbot/files \
  && chown -R bot:bot /home/bot/grokbot
 
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/grokbot-entrypoint
-COPY --chmod=0755 shot.sh /usr/local/bin/grokbot-shot
+COPY entrypoint.sh /usr/local/bin/grokbot-entrypoint
+COPY shot.sh /usr/local/bin/grokbot-shot
+# chmod here rather than `COPY --chmod`, which needs BuildKit; this daemon has none.
+RUN chmod 0755 /usr/local/bin/grokbot-entrypoint /usr/local/bin/grokbot-shot
 
 USER bot
 WORKDIR /home/bot

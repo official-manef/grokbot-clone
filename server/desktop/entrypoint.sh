@@ -20,10 +20,15 @@ vnc_port_for() { # 0 -> 6080, n -> 6080+n
 
 echo "[entrypoint] screens=$SCREENS resolution=$RESOLUTION"
 
+X_PIDS=()
+
 for i in $(seq 0 $((SCREENS - 1))); do
   d="$(display_for "$i")"
   num="${d#:}"
   Xvfb "$d" -screen 0 "$RESOLUTION" -nolisten tcp -ac >"/tmp/xvfb-$num.log" 2>&1 &
+  # Only the X servers are waited on. `wait -n` over every job would return as
+  # soon as a one-shot helper (xsetroot) finished, which looked like a crash.
+  X_PIDS+=("$!")
 
   # Wait for the display before starting anything that needs it.
   for _ in $(seq 1 50); do
@@ -44,13 +49,15 @@ for i in $(seq 0 $((SCREENS - 1))); do
     sleep 0.1
   done
 
-  websockify --web /usr/share/novnc 0.0.0.0:"$(vnc_port_for "$i")" "127.0.0.1:$((5900 + i))" \
+  # No --web: the app ships its own RFB client, so websockify is a pure proxy.
+  websockify 0.0.0.0:"$(vnc_port_for "$i")" "127.0.0.1:$((5900 + i))" \
     >"/tmp/websockify-$num.log" 2>&1 &
 done
 
-echo "[entrypoint] displays up: $(seq -s, 0 $((SCREENS - 1)) | sed 's/[0-9]\+/&/g')"
-# tini is PID 1; keep the container alive as long as the X servers are.
-wait -n
+echo "[entrypoint] displays up: 0..$((SCREENS - 1))"
+# tini is PID 1; stay alive exactly as long as the X servers do. A dead display
+# means the box is useless, so the container exits and the host restarts it.
+wait -n "${X_PIDS[@]}"
 status=$?
-echo "[entrypoint] a display process exited ($status); shutting the box down"
+echo "[entrypoint] an X server exited ($status); shutting the box down"
 kill 0

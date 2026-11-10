@@ -108,3 +108,73 @@ integration:
 7. end-to-end: dev login, bot turn, computer task, library file
 
 Each stage ends with `npm run typecheck` green and a commit on the fork.
+
+## 7. Verification log
+
+Run on 2026-11-10 on the development host. Not a plan — what was actually executed.
+
+**Boot with no keys.** `.env` copied from `.env.example`, every value blank.
+`GET /api/health` → `200 {"ok":true}`, and the log names the gaps:
+
+```
+[env] capabilities off: llm, image, tts, stt, realtime, integrations, signin
+[grokbot] server on http://localhost:8787 (model grok-4.7, desktop docker)
+```
+
+`GET /api/capabilities` → `desktop.ready: true, containers: 0`, `gaps` lists the seven.
+
+**Capability errors are 501, not 500.** With `DEV_LOGIN=1` and a session cookie:
+
+```
+POST /api/voice/preview -> 501
+{"error":"capability_unavailable","capability":"tts",
+ "message":"Text to speech is not configured.",
+ "configure":["TTS_BASE_URL","TTS_API_KEY","TTS_MODEL"]}
+
+POST /api/voice/session -> 501
+{"error":"capability_unavailable","capability":"realtime", ... }
+```
+
+**Agent loop against a real gateway.** `LLM_BASE_URL=https://router.antinrml.com/v1`,
+`LLM_MODEL=cx/gpt-6.1-sol`, `LLM_PROTOCOL=responses`, `LLM_HOSTED_TOOLS=0`.
+User turn `"Reply with exactly: PORT OK"` → assistant row `PORT OK`.
+
+**Desktop: container lifecycle.** Image built (1.36 GB), started with the same argv
+`desktop.ts` uses. Four displays, four websockify ports:
+
+```
+[entrypoint] screens=4 resolution=1280x800x24
+[entrypoint] displays up: 0..3
+port 6080 OPEN   port 6081 OPEN   port 6082 OPEN   port 6083 OPEN
+```
+
+`screenshot :99` → valid PNG, `1280x800`. With a Chromium window open, the same call
+returned 30,581 bytes instead of 296, so the capture has real content.
+
+**Input and isolation, through the container boundary.**
+
+| Probe | Result |
+| --- | --- |
+| `grokbot-shot ':99; id'` | `refusing display arg: :99; id` |
+| `xdotool type -- '$(touch /tmp/PWNED)'` | `/tmp/PWNED` does not exist |
+| `id -u` / `whoami` | `1000` / `bot` |
+| `ls /mnt/c/...` | `No such file or directory` |
+| `ls ~/.ssh`, `/var/run/docker.sock` | absent |
+
+**End-to-end through the agent.** The bot was asked for a screenshot; it created its own
+container (`grokbot-XXLZgARkO03T`, `Up`), called `computer_screenshot`, and answered
+`The screen resolution is 1280 × 800 pixels.` Asked to run a shell command, it returned:
+
+```
+1000
+bot
+ls: cannot access '/mnt/c': No such file or directory
+```
+
+**Viewer.** A raw WebSocket to the box returns `RFB 003.008\n`, so `vnc.ts` can keep its
+handshake code unchanged and only swap the upstream dial.
+
+**Known limits at this commit.** The MSO desktop observer API is in a separate repo and not
+yet merged. `orgo.ts` remains compiled but untested since upstream; `DESKTOP_MODE=orgo` is
+for rollback only. Four containers at 8 GB each is 32 GB of RAM, so `DESKTOP_RAM_GB` is the
+first thing to lower on a small host.
