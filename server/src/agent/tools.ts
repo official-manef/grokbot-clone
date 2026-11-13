@@ -4,14 +4,14 @@ import { hub } from '../lib/hub.js';
 import { box, boxGrokbot } from '../box.js';
 import { env } from '../env.js';
 import { generateImage, imageConfigured } from '../providers/image.js';
-import { ttsConfigured } from '../providers/speech.js';
 import { screenFor } from '../computer.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
+import { appendEngineMemory } from '../engine-memory.js';
+import { engineHome } from '../engine.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
 import { setCheckins } from '../proactive.js';
-import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
@@ -24,8 +24,8 @@ export interface ToolCtx {
 }
 
 export interface ToolResult {
-  /** Responses API function_call_output.output: string or content array (text + images). */
-  output: string | any[];
+  /** Text handed back to the agent. */
+  output: string;
   summary?: string;
   /** End the turn after this tool (e.g. a question was asked). */
   endTurn?: boolean;
@@ -44,17 +44,28 @@ interface ToolDef {
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
+/**
+ * Take a screenshot and return it as a URL the engine can fetch.
+ *
+ * The tool result crosses into the Hermes engine, which accepts a string, not a
+ * content array. So the image is written into the bot's Library and the result
+ * names a URL the engine can open: same information, one wire type.
+ */
 async function shot(ctx: ToolCtx, caption: string): Promise<ToolResult> {
   const { computerId, screenId } = await screenFor(ctx.userId, ctx.botId);
   await new Promise((r) => setTimeout(r, 700));
-  const s = await box.screenshot(computerId, screenId);
+  const s = await box.computer.screenshot(computerId, screenId);
   const mime = s.mime_type ?? 'image/png';
-  const url = s.image.startsWith('data:') ? s.image : `data:${mime};base64,${s.image}`;
+  const dir = `${boxGrokbot()}/files/${ctx.botId}`;
+  const name = `screen-${Date.now()}.png`;
+  const b64 = s.image.replace(/^data:[^,]+,/, '');
+  const pathOnBox = `${dir}/${name}`;
+  try {
+    await box.computer.bash(computerId, screenId, `mkdir -p ${dir} && printf '%s' '${b64}' | base64 -d > ${pathOnBox}`, 60);
+  } catch { /* the URL below still describes what was captured */ }
+  const url = `/api/bots/${ctx.botId}/screenshot?seq=${encodeURIComponent(name)}`;
   return {
-    output: [
-      { type: 'input_text', text: `${caption} Screen is ${s.width}x${s.height}px.` },
-      { type: 'input_image', image_url: url, detail: 'high' },
-    ],
+    output: `${caption} Screen is ${s.width}x${s.height}px. Image: ${url}`,
     summary: caption,
   };
 }
@@ -67,6 +78,51 @@ async function onScreen<T>(ctx: ToolCtx, fn: (computerId: string, screenId: stri
 function botByName(userId: string, name: string) {
   return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?)').get(userId, name.trim()) as any;
 }
+
+/** Live X research through xAI's search tool. Returns the answer text followed by the posts it cites. */
+async function xSearch(a: any): Promise<string> {
+  const clean = (v: unknown) => (Array.isArray(v) ? v.map((h) => String(h).replace(/^@/, '').trim()).filter(Boolean).slice(0, 10) : []);
+  const tool: Record<string, unknown> = { type: 'x_search' };
+  const only = clean(a.handles);
+  const not = clean(a.exclude_handles);
+  if (only.length) tool.allowed_x_handles = only;
+  else if (not.length) tool.excluded_x_handles = not;
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if (day.test(String(a.from_date ?? ''))) tool.from_date = a.from_date;
+  if (day.test(String(a.to_date ?? ''))) tool.to_date = a.to_date;
+  const res = await fetch('https://api.x.ai/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.xaiKey}`, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(240_000),
+    body: JSON.stringify({
+      model: env.xaiModel,
+      store: false,
+      tools: [tool],
+      input: [
+        { role: 'system', content: 'You are a research tool used by another AI agent. Search X and answer the question precisely. For each post you rely on give the author handle, the date, engagement numbers when you can see them, and the link. No preamble and no advice.' },
+        { role: 'user', content: String(a.query ?? '') },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`X search failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  const data: any = await res.json();
+  const parts: string[] = [];
+  const links = new Set<string>();
+  for (const item of data.output ?? []) {
+    if (item?.type !== 'message') continue;
+    for (const c of item.content ?? []) {
+      if (typeof c?.text === 'string') parts.push(c.text);
+      for (const an of c?.annotations ?? []) if (an?.url) links.add(String(an.url));
+    }
+  }
+  for (const u of data.citations ?? []) if (typeof u === 'string') links.add(u);
+  const text = parts.join('\n\n').trim() || 'No answer came back.';
+  const sources = [...links].slice(0, 40);
+  return (sources.length ? `${text}\n\nSources:\n${sources.map((u) => `- ${u}`).join('\n')}` : text).slice(0, 60000);
+}
+
+/** Where each bot's Library lives on the shared computer. */
+export const LIBRARY_ROOT = '/root/grokbot/files';
 
 export const TOOLS: ToolDef[] = [
   {
@@ -84,7 +140,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Clicking on screen',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => box.click(c, s, { x: a.x, y: a.y, button: a.button ?? 'left', double: !!a.double }));
+      await onScreen(ctx, (c, s) => box.computer.click(c, s, { x: a.x, y: a.y, button: a.button ?? 'left', double: !!a.double }));
       return shot(ctx, `Clicked (${a.x}, ${a.y}).`);
     },
   },
@@ -96,7 +152,7 @@ export const TOOLS: ToolDef[] = [
     label: 'Typing',
     impl: async (a, ctx) => {
       const text = String(a.text);
-      for (let i = 0; i < text.length; i += 1500) await onScreen(ctx, (c, s) => box.type(c, s, text.slice(i, i + 1500)));
+      for (let i = 0; i < text.length; i += 1500) await onScreen(ctx, (c, s) => box.computer.type(c, s, text.slice(i, i + 1500)));
       return shot(ctx, `Typed ${text.length} characters.`);
     },
   },
@@ -108,7 +164,7 @@ export const TOOLS: ToolDef[] = [
     label: 'Pressing keys',
     impl: async (a, ctx) => {
       const keys = String(a.keys).split('+').map((k) => (k.length === 1 ? k.toLowerCase() : k)).join('+');
-      await onScreen(ctx, (c, s) => box.key(c, s, keys));
+      await onScreen(ctx, (c, s) => box.computer.key(c, s, keys));
       return shot(ctx, `Pressed ${keys}.`);
     },
   },
@@ -119,7 +175,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Scrolling',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => box.scroll(c, s, { x: a.x, y: a.y, direction: a.direction, amount: a.amount ?? 3 }));
+      await onScreen(ctx, (c, s) => box.computer.scroll(c, s, { x: a.x, y: a.y, direction: a.direction, amount: a.amount ?? 3 }));
       return shot(ctx, `Scrolled ${a.direction}.`);
     },
   },
@@ -130,7 +186,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Dragging',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => box.drag(c, s, a));
+      await onScreen(ctx, (c, s) => box.computer.drag(c, s, a));
       return shot(ctx, 'Dragged.');
     },
   },
@@ -146,7 +202,7 @@ export const TOOLS: ToolDef[] = [
         const display = s === 'default' ? ':99' : `:${s.replace('screen-', '')}`;
         const profile = `${boxGrokbot()}/profiles/${ctx.botId}`;
         // Reuse the bot's running Chrome if present (opens a new tab), else start one detached.
-        return box.bash(
+        return box.computer.bash(
           c,
           s,
           `export DISPLAY=${display}; mkdir -p ${profile}; pgrep -f "user-data-dir=${profile}" >/dev/null || rm -f ${profile}/Singleton*; ` +
@@ -160,21 +216,27 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'save_file',
-    description: "Save a deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under your Library.",
+    description: "Save a finished deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Files you write into that folder yourself show up in the Library too.",
     parameters: obj({ filename: { type: 'string', description: 'e.g. briefing-2026-11-09.md' }, content: { type: 'string' } }, ['filename', 'content']),
     activity: 'drafting_file',
-    label: 'Saving notes',
+    label: 'Saving a file',
     impl: async (a, ctx) => {
       const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
+      // One path for both modes: on a Docker box it is the unprivileged user's
+      // Library, on a shared VM it is /root/grokbot/files. boxGrokbot() decides.
       const dir = `${boxGrokbot()}/files/${ctx.botId}`;
-      const b64 = Buffer.from(String(a.content), 'utf8').toString('base64');
-      // Chunk the base64 so very large files don't exceed a single command's size.
-      await onScreen(ctx, async (c, s) => {
-        await box.bash(c, s, `mkdir -p ${dir} && : > ${dir}/${name}.b64`, 30);
-        for (let i = 0; i < b64.length; i += 60000) await box.bash(c, s, `printf '%s' '${b64.slice(i, i + 60000)}' >> ${dir}/${name}.b64`, 30);
-        return box.bash(c, s, `base64 -d ${dir}/${name}.b64 > ${dir}/${name} && rm ${dir}/${name}.b64 && wc -c ${dir}/${name}`, 30);
-      });
-      return { output: JSON.stringify({ ok: true, path: `${dir}/${name}` }), summary: `Saved ${name}` };
+      const file = `${dir}/${name}`;
+      if (!env.localBox && env.desktop.mode === 'docker') {
+        const b64 = Buffer.from(String(a.content), 'utf8').toString('base64');
+        await onScreen(ctx, async (c, s) => {
+          await box.computer.bash(c, s, `mkdir -p ${dir} && : > ${file}.b64`, 30);
+          for (let i = 0; i < b64.length; i += 60000) await box.computer.bash(c, s, `printf '%s' '${b64.slice(i, i + 60000)}' >> ${file}.b64`, 30);
+          return box.computer.bash(c, s, `base64 -d ${file}.b64 > ${file} && rm ${file}.b64 && wc -c ${file}`, 30);
+        });
+      } else {
+        await box.writeFile(file, String(a.content ?? ''));
+      }
+      return { output: JSON.stringify({ ok: true, path: file }), summary: `Saved ${name}` };
     },
   },
   {
@@ -184,7 +246,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'running_commands',
     label: 'Running commands',
     impl: async (a, ctx) => {
-      const r = await onScreen(ctx, (c, s) => box.bash(c, s, String(a.command), Math.min(Math.max(a.timeout_seconds ?? 120, 1), 290)));
+      const r = await onScreen(ctx, (c, s) => box.computer.bash(c, s, String(a.command), Math.min(Math.max(a.timeout_seconds ?? 120, 1), 290)));
       const out = (r.output ?? '').slice(-20000);
       return { output: JSON.stringify({ exit_code: r.exit_code, output: out }), summary: `exit ${r.exit_code}` };
     },
@@ -204,11 +266,11 @@ export const TOOLS: ToolDef[] = [
       const dir = `${boxGrokbot()}/files/${ctx.botId}`;
       const saved: string[] = [];
       const result = await onScreen(ctx, async (c, s) => {
-        await box.bash(c, s, `mkdir -p ${dir}`, 30);
+        await box.computer.bash(c, s, `mkdir -p ${dir}`, 30);
         for (const [i, img] of images.entries()) {
           const file = images.length > 1 ? `${i}-${name}` : name;
           // base64 in, file out: no host path is ever involved.
-          await box.bash(c, s, `printf '%s' '${img.b64.replace(/'/g, "'\\''")}' | base64 -d > ${dir}/${file}`, 60);
+          await box.computer.bash(c, s, `printf '%s' '${img.b64.replace(/'/g, "'\\''")}' | base64 -d > ${dir}/${file}`, 60);
           saved.push(`${dir}/${file}`);
         }
         return null;
@@ -218,27 +280,39 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    // Memory belongs to the bot's Hermes home (engine-memory.ts), not to this
+    // database, so the engine's own `remember` is the writer. This tool only
+    // records a note the app can show in the Memories panel.
     name: 'remember',
-    description: 'Save a durable memory about the user, their preferences, or your job, so you remember it in future conversations.',
+    description: 'Save a durable note about the user, their preferences, or your job so it survives future conversations. Prefer your own memory tool when you have one.',
     parameters: obj({ text: { type: 'string' } }, ['text']),
     activity: 'remembering',
     label: 'Saving notes',
     impl: async (a, ctx) => {
+      const home = engineHome(ctx.botId);
+      if (home) {
+        appendEngineMemory(ctx.botId, 'MEMORY.md', String(a.text));
+        return { output: 'Saved to memory.', summary: 'Saved a memory' };
+      }
       db.prepare('INSERT INTO memories(id,bot_id,text,created_at) VALUES (?,?,?,?)').run(newId('mem'), ctx.botId, String(a.text), now());
       return { output: 'Saved to memory.', summary: 'Saved a memory' };
     },
   },
   {
-    name: 'recall',
-    description: 'Search your saved memories.',
-    parameters: obj({ query: { type: 'string' } }, ['query']),
-    activity: 'remembering',
-    label: 'Searching memory',
-    impl: async (a, ctx) => {
-      const words = String(a.query).toLowerCase().split(/\W+/).filter((w) => w.length > 2);
-      const all = db.prepare('SELECT text, created_at FROM memories WHERE bot_id=? ORDER BY created_at DESC').all(ctx.botId) as any[];
-      const hits = all.filter((m) => !words.length || words.some((w) => m.text.toLowerCase().includes(w))).slice(0, 20);
-      return { output: JSON.stringify(hits.map((h) => h.text)) };
+    name: 'x_search',
+    description: "Research X (Twitter) live: what people are posting about a topic, what is going viral, reactions to news, or one account's recent posts. Returns a written answer with links to the posts. Ask one focused question per call and say what you want back, e.g. \"the 10 most-engaged posts about AI agents from the last 48 hours, with author, likes and link\".",
+    parameters: obj({
+      query: { type: 'string', description: 'What to find out, in plain words.' },
+      handles: { type: 'array', items: { type: 'string' }, description: 'Only search posts from these accounts (without @). Up to 10.' },
+      exclude_handles: { type: 'array', items: { type: 'string' }, description: 'Leave out posts from these accounts.' },
+      from_date: { type: 'string', description: 'Earliest post date, YYYY-MM-DD.' },
+      to_date: { type: 'string', description: 'Latest post date, YYYY-MM-DD.' },
+    }, ['query']),
+    activity: 'searching_web',
+    label: 'Searching X',
+    impl: async (a) => {
+      const r = await xSearch(a);
+      return { output: r, summary: 'Searched X' };
     },
   },
   {
@@ -391,56 +465,6 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'spawn_subagent',
-    description: 'Start a subagent: a helper copy of you with its own context and its own computer screen, to work on one goal in parallel (e.g. research one company each). It reports back to you as a message when done. Max 4 at a time.',
-    parameters: obj({ goal: { type: 'string', description: 'Self-contained task with everything the subagent needs to know' }, label: { type: 'string', description: 'Short name, e.g. "Acme research"' } }, ['goal']),
-    activity: 'messaging_named',
-    label: 'Starting a helper',
-    impl: async (a, ctx) => {
-      if (ctx.depth >= 2) return { output: 'Subagents cannot start more subagents. Do the work yourself.' };
-      try {
-        const sub = createSubagent(ctx.botId, String(a.goal), a.label);
-        ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.goal), ctx.depth + 1);
-        return { output: JSON.stringify({ ok: true, subagent_id: sub.id, name: sub.name, note: 'It will report back to you as a message. Continue with other work or end your turn.' }), summary: `Started ${sub.name}` };
-      } catch (e: any) {
-        return { output: String(e?.message ?? e) };
-      }
-    },
-  },
-  {
-    name: 'list_subagents',
-    description: 'List your subagents with their status and latest message.',
-    parameters: obj({}),
-    activity: 'working',
-    label: 'Checking on helpers',
-    impl: async (_a, ctx) => ({ output: JSON.stringify(listSubagents(ctx.botId)) }),
-  },
-  {
-    name: 'message_subagent',
-    description: 'Send a follow-up instruction to one of your subagents.',
-    parameters: obj({ subagent_id: { type: 'string' }, message: { type: 'string' } }, ['subagent_id', 'message']),
-    activity: 'messaging_named',
-    label: 'Checking with a helper',
-    impl: async (a, ctx) => {
-      const sub = db.prepare('SELECT id FROM bots WHERE id=? AND parent_bot_id=?').get(a.subagent_id, ctx.botId) as any;
-      if (!sub) return { output: 'No such subagent.' };
-      ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.message), ctx.depth + 1);
-      return { output: 'Sent.' };
-    },
-  },
-  {
-    name: 'stop_subagent',
-    description: 'Stop and remove one of your subagents (do this once you have its result).',
-    parameters: obj({ subagent_id: { type: 'string' } }, ['subagent_id']),
-    activity: 'working',
-    label: 'Wrapping up a helper',
-    impl: async (a, ctx) => {
-      const { interrupt } = await import('./loop.js');
-      interrupt(String(a.subagent_id));
-      return { output: deleteSubagent(ctx.botId, String(a.subagent_id)) ? 'Stopped and removed.' : 'No such subagent.' };
-    },
-  },
-  {
     name: 'create_group',
     description: "Create a group chat between the user and several Bots on the team (by name). It appears in the user's sidebar; when the user posts there, the relevant Bots answer.",
     parameters: obj({ name: { type: 'string' }, bot_names: { type: 'array', items: { type: 'string' } } }, ['name', 'bot_names']),
@@ -520,7 +544,16 @@ export type Decision = 'allow' | 'ask' | 'block';
 export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
   if (toolMap.has(toolName)) return { decision: 'allow', key: toolName, title: toolName };
   const slugs = innerToolSlugs(toolName, args);
-  if (!slugs.length) return { decision: 'allow', key: toolName, title: toolName };
+  if (!slugs.length) {
+    // Composio's sandbox can run app actions from code, which would slip past the per-action
+    // approvals below. Code that reaches for them is treated like a write to an app.
+    if (/^COMPOSIO_REMOTE_(WORKBENCH|BASH_TOOL)$/.test(toolName) && /run_composio_tool|proxy_execute|execute_tool|composio/i.test(JSON.stringify(args ?? {}))) {
+      const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, toolName) as any;
+      const mode = p?.mode ?? 'needs_approval';
+      return { decision: mode === 'blocked' ? 'block' : mode === 'always_allow' ? 'allow' : 'ask', key: toolName, title: 'Run code that uses your connected apps' };
+    }
+    return { decision: 'allow', key: toolName, title: toolName };
+  }
   let decision: Decision = 'allow';
   let key = slugs[0];
   for (const slug of slugs) {
@@ -547,11 +580,49 @@ export async function runComposioTool(ctx: ToolCtx, name: string, args: any): Pr
   return { output: out, summary: ok ? 'done' : 'failed' };
 }
 
-export function activityFor(name: string): { kind: ActivityKind; label: string } {
-  const t = toolMap.get(name);
-  if (t) return { kind: t.activity, label: t.label };
-  if (name === 'COMPOSIO_SEARCH_TOOLS' || name === 'COMPOSIO_GET_TOOL_SCHEMAS') return { kind: 'connecting_service', label: 'Using a connected app' };
-  return { kind: 'connecting_service', label: 'Using a connected app' };
+/** A Hermes tool name as the app knows it: tools served by this app's MCP server lose their `mcp_hq_` prefix. */
+export function appToolName(raw: string): { name: string; ours: boolean; server?: string } {
+  const hq = /^mcp_+hq_+(.+)$/.exec(raw);
+  if (hq) {
+    // Hermes may fold names to lower case; ours are matched case-insensitively.
+    const hit = [...toolMap.keys()].find((k) => k.toLowerCase() === hq[1].toLowerCase());
+    return { name: hit ?? (/^composio_/i.test(hq[1]) ? hq[1].toUpperCase() : hq[1]), ours: true };
+  }
+  const other = /^mcp_+([a-zA-Z0-9-]+?)_+(.+)$/.exec(raw);
+  if (other) return { name: other[2], ours: false, server: other[1] };
+  return { name: raw, ours: false };
+}
+
+const words = (s: string) => s.replace(/[_-]+/g, ' ').trim();
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** What to show while a tool runs. `raw` is the name Hermes reports. */
+export function activityFor(raw: string): { kind: ActivityKind; label: string; detail?: string } {
+  const { name, ours, server } = appToolName(raw);
+  if (ours) {
+    const t = toolMap.get(name);
+    if (t) return { kind: t.activity, label: t.label, ...(name === 'x_search' ? { detail: 'X' } : {}) };
+    return { kind: 'connecting_service', label: 'Using a connected app' };
+  }
+  if (server) return { kind: 'connecting_service', label: `Using ${words(server)}`, detail: sentence(words(server)) };
+  if (name === 'terminal' || name === 'process' || name === 'execute_code') return { kind: 'running_commands', label: 'Running commands' };
+  if (name === 'write_file' || name === 'patch') return { kind: 'drafting_file', label: 'Writing a file' };
+  if (name === 'read_file' || name === 'search_files') return { kind: 'working', label: 'Reading files' };
+  if (name === 'web_search') return { kind: 'searching_web', label: 'Searching the web' };
+  if (name === 'web_extract') return { kind: 'reading_web', label: 'Reading a page' };
+  if (name === 'x_search') return { kind: 'searching_web', label: 'Searching X', detail: 'X' };
+  if (name.startsWith('browser_')) return { kind: 'browsing_web', label: 'Browsing a site' };
+  if (name === 'computer_use') return { kind: 'on_its_computer', label: 'Using its computer' };
+  if (name === 'vision_analyze') return { kind: 'working', label: 'Looking at an image' };
+  if (name === 'memory') return { kind: 'remembering', label: 'Saving notes' };
+  if (name === 'session_search') return { kind: 'remembering', label: 'Searching memory' };
+  if (name === 'todo') return { kind: 'working', label: 'Planning' };
+  if (name === 'delegate_task') return { kind: 'working', label: 'Handing off work' };
+  if (name === 'send_message') return { kind: 'messaging_named', label: 'Sending a message' };
+  if (name.startsWith('skill')) return { kind: 'working', label: 'Using a skill' };
+  if (name === 'clarify') return { kind: 'waiting_for_you', label: 'Waiting on you' };
+  if (name === 'cronjob') return { kind: 'working', label: 'Scheduling' };
+  return { kind: 'working', label: sentence(words(name)) || 'Working' };
 }
 
 export function getBotName(botId: string) {

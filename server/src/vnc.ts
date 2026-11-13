@@ -3,8 +3,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
 import { userFromCookieHeader } from './lib/auth.js';
 import { vncAuthResponse } from './lib/des.js';
-import { box } from './box.js';
-import { screenFor } from './computer.js';
+import { orgo } from './orgo.js';
+import { readyScreen, screenFor } from './computer.js';
 import { viewerClosed, viewerOpened } from './idle.js';
 
 /**
@@ -158,9 +158,10 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
 
   try {
     const { computerId, screenId } = await screenFor(userId, botId);
-    const upstreamInfo = await box.vncUpstream(computerId, screenId);
-    const upUrl = upstreamInfo.url;
-    const password = upstreamInfo.password;
+    // A screen nobody has used yet is bare; set it up while the person is already watching.
+    readyScreen(userId, botId).catch(() => {});
+    const { password } = await orgo.vncPassword(computerId);
+    const upUrl = `wss://www.orgo.ai/desktops/${computerId}/ws/websockify?token=${encodeURIComponent(password)}${screenId !== 'default' ? `&screen=${encodeURIComponent(screenId)}` : ''}`;
     upstream = new WebSocket(upUrl, ['binary']);
     upstream.on('message', (data: Buffer) => {
       if (!piping) return fromUp.push(Buffer.from(data));
