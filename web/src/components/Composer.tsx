@@ -6,6 +6,7 @@ import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { useDictation } from '../voice/dictation';
+import { useCapability } from '../lib/capabilities';
 
 const MAX_H = 200;
 const drafts = new Map<string, string>();
@@ -17,6 +18,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const setModal = useStore((s) => s.setModal);
+  const canDictate = useCapability('stt');
+  const canCall = useCapability('realtime');
+  const canConnect = useCapability('integrations');
 
   // Per-bot drafts.
   useEffect(() => { setText(drafts.get(bot.id) ?? ''); setError(null); ref.current?.focus(); }, [bot.id]);
@@ -92,7 +96,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 onClose={() => setMenu(false)}
                 items={[
                   { label: 'New conversation', onSelect: fresh },
-                  { label: 'Connect apps', onSelect: () => setModal('apps') },
+                  ...(canConnect ? [{ label: 'Connect apps', onSelect: () => setModal('apps') }] : []),
                 ]}
               />
             )}
@@ -111,20 +115,22 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           />
         </div>
         <div className="composer__right">
-          <button
-            type="button"
-            className={`composer__btn${dictation.state === 'recording' ? ' is-recording' : dictation.state === 'transcribing' ? ' is-transcribing' : ''}`}
-            aria-label={dictation.state === 'recording' ? 'Stop dictation' : 'Dictate'}
-            aria-pressed={dictation.state === 'recording'}
-            title={dictation.state === 'recording' ? 'Release or click to stop · Esc cancels' : dictation.state === 'transcribing' ? 'Transcribing…' : 'Hold to dictate, or click to start'}
-            disabled={dictation.state === 'transcribing'}
-            onPointerDown={dictation.onPointerDown}
-            onPointerUp={dictation.onPointerUp}
-            onKeyDown={dictation.onKeyDown}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <Icon name="mic" opacity={0.56} />
-          </button>
+          {canDictate && (
+            <button
+              type="button"
+              className={`composer__btn${dictation.state === 'recording' ? ' is-recording' : dictation.state === 'transcribing' ? ' is-transcribing' : ''}`}
+              aria-label={dictation.state === 'recording' ? 'Stop dictation' : 'Dictate'}
+              aria-pressed={dictation.state === 'recording'}
+              title={dictation.state === 'recording' ? 'Release or click to stop · Esc cancels' : dictation.state === 'transcribing' ? 'Transcribing…' : 'Hold to dictate, or click to start'}
+              disabled={dictation.state === 'transcribing'}
+              onPointerDown={dictation.onPointerDown}
+              onPointerUp={dictation.onPointerUp}
+              onKeyDown={dictation.onKeyDown}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <Icon name="mic" opacity={0.56} />
+            </button>
+          )}
           {inCall && !hasText ? (
             <button type="button" className="composer__cta is-in-call" onClick={endCall} aria-label="End voice call" title="End voice call">
               <Icon name="voice_a" size={16} />
@@ -133,7 +139,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             <button type="button" className="composer__cta" onClick={stop} aria-label="Stop" title="Stop">
               <Icon name="stop" size={14} />
             </button>
-          ) : (
+          ) : (hasText || canCall) ? (
             <button
               type="button"
               className="composer__cta"
@@ -144,7 +150,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             >
               <Icon name={hasText ? 'arrow_up' : 'voice_a'} size={16} />
             </button>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

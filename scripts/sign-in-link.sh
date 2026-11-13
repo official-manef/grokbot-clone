@@ -7,7 +7,10 @@ set -euo pipefail
 email="${1:?usage: sign-in-link.sh <email>}"
 ENV_FILE="${ENV_FILE:-/opt/hq/app/.env}"
 val() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2-; }
-key="$(printf 'owner-login' | openssl dgst -sha256 -hmac "$(val SESSION_SECRET)" -r | cut -d' ' -f1)"
+# The secret goes through a 0600 temp file, not argv: `ps` shows cat's path, never the secret.
+sf="$(mktemp)"; trap 'rm -f "$sf"' EXIT
+val SESSION_SECRET > "$sf"
+key="$(printf 'owner-login' | openssl dgst -sha256 -hmac "$(cat "$sf")" -r | cut -d' ' -f1)"
 curl -fsS -X POST "http://127.0.0.1:$(val PORT)/api/auth/owner" \
   -H "authorization: Bearer $key" -H 'content-type: application/json' \
   -d "{\"email\":\"$email\",\"link\":true}" | sed -E 's/.*"url":"([^"]+)".*/\1/'

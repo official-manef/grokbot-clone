@@ -15,11 +15,19 @@ tgz="${1:?usage: install-on-computer.sh <hq-app.tgz>}"
 APP=/opt/hq/app; DATA=/opt/hq/data; NODE_DIR=/opt/hq/node; NODE_V=v22.21.1
 PORT="${PORT:-8787}"; HERMES_HOME_DIR="${HERMES_HOME_PRIMARY:-/root/.hermes}"
 umask 077
+trap 'rm -rf "${node_tmp:-}" "${secret_file:-}"' EXIT
 mkdir -p "$APP" "$DATA" "$NODE_DIR" /var/log/hq
 
 # 1. A private Node (the system one may be too old, and we leave it alone).
 if ! "$NODE_DIR/bin/node" -v 2>/dev/null | grep -q '^v22\.'; then
-  curl -fsSL "https://nodejs.org/dist/$NODE_V/node-$NODE_V-linux-x64.tar.gz" | tar -xz -C "$NODE_DIR" --strip-components=1
+  node_tgz="node-$NODE_V-linux-x64.tar.gz"
+  node_tmp="$(mktemp -d)"
+  curl -fsSL "https://nodejs.org/dist/$NODE_V/$node_tgz" -o "$node_tmp/$node_tgz"
+  curl -fsSL "https://nodejs.org/dist/$NODE_V/SHASUMS256.txt" -o "$node_tmp/SHASUMS256.txt"
+  sums="$(cd "$node_tmp" && sha256sum -c --ignore-missing SHASUMS256.txt 2>&1)" || true
+  [ "$sums" = "$node_tgz: OK" ] \
+    || { echo "SHA256 verification FAILED for $node_tgz; refusing to install it:" >&2; echo "$sums" >&2; exit 1; }
+  tar -xz -C "$NODE_DIR" --strip-components=1 -f "$node_tmp/$node_tgz"
 fi
 export PATH="$NODE_DIR/bin:$PATH"
 
@@ -90,8 +98,10 @@ for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/nul
 curl -fsS "http://127.0.0.1:$PORT/api/health" && echo
 
 # 5. What to add to the main agent's Hermes config so it gets the app's tools (never done here).
-secret="$(grep -E '^SESSION_SECRET=' "$APP/.env" | cut -d= -f2-)"
-tok="$(printf 'mcp:primary' | openssl dgst -sha256 -hmac "$secret" -r | cut -d' ' -f1)"
+secret_file="$(mktemp)"
+grep -E '^SESSION_SECRET=' "$APP/.env" | cut -d= -f2- > "$secret_file"
+# Read from a 0600 temp file so the secret never shows in `ps` (cat's argv is only the path).
+tok="$(printf 'mcp:primary' | openssl dgst -sha256 -hmac "$(cat "$secret_file")" -r | cut -d' ' -f1)"
 umask 077
 cat > "$DATA/hermes-mcp-hq.yaml" <<EOF
 # Add under mcp_servers: in $HERMES_HOME_DIR/config.yaml (Hermes picks it up without a restart).

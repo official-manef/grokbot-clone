@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { BotAvatar } from '../avatar/BotAvatar';
 import { api } from '../lib/api';
 import { useStore } from '../store';
+import { useCapability } from '../lib/capabilities';
 import { TrafficLights } from './Sidebar';
 
 export function SignIn() {
   const devLogin = useStore((s) => s.devLogin);
   const checkAuth = useStore((s) => s.checkAuth);
+  const canGoogle = useCapability('signin');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -28,9 +30,11 @@ export function SignIn() {
         </div>
         <h1 className="signin__title">Grokbot</h1>
         <p className="signin__sub">AI teammates with their own computers. Hand them a task and they get it done.</p>
-        <a className="btn btn--primary signin__google" href="/api/auth/google/start">
-          <GoogleG /> Sign in with Google
-        </a>
+        {canGoogle && (
+          <a className="btn btn--primary signin__google" href="/api/auth/google/start">
+            <GoogleG /> Sign in with Google
+          </a>
+        )}
         {devLogin && (
           <form className="signin__dev" onSubmit={dev}>
             <div className="signin__divider"><span>Dev sign-in</span></div>

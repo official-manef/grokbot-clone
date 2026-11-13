@@ -123,8 +123,10 @@ a { color: inherit; }
 
 /* A deployment that is missing keys says so once, at the top, instead of
    failing a click. Muted by default; red only when the model itself is absent. */
+.app-frame { display: flex; flex-direction: column; height: 100%; width: 100%; }
+.app-frame > .app { flex: 1 1 0; min-height: 0; height: auto; }
 .capability-notice {
-  grid-column: 1 / -1;
+  flex: none;
   display: flex;
   gap: 6px;
   align-items: baseline;

@@ -21,7 +21,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api/voice${path}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
     let msg = res.statusText;
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
+    try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* not json */ }
     throw new Error(msg || `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
@@ -55,7 +55,7 @@ export const voiceApi = {
     const res = await fetch('/api/voice/stt', { method: 'POST', credentials: 'include', body: fd });
     if (!res.ok) {
       let msg = 'Transcription failed';
-      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
+      try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* not json */ }
       throw new Error(msg);
     }
     return ((await res.json()) as { text: string }).text;

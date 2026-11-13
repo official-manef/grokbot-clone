@@ -90,10 +90,9 @@ async function askSecret(question) {
   if (!process.stdin.isTTY) return ask(question, '');
   return new Promise((resolve) => {
     const r = rl();
-    const onData = (buf) => {
-      const s = buf.toString();
-      // Redraw the prompt and only the characters just typed, never the key.
-      if (s.includes('\n') || s.includes('\r')) return;
+    const onData = () => {
+      // A paste arrives in one chunk, newline included: always redraw the mask,
+      // never the key. The newline itself is stripped by readline and .trim().
       process.stdout.write(`\r\x1b[K${cyan('?')} ${question} ${'*'.repeat(8)}`);
     };
     process.stdin.on('data', onData);
@@ -168,10 +167,16 @@ async function httpProbe(url, init = {}, timeoutMs = 8000) {
   }
 }
 
+/**
+ * The saved base stays the bare origin (the Anthropic SDK inside Hermes adds
+ * /v1 itself); the probe has to add it, since the API lives at /v1/messages.
+ */
+const anthropicApi = (base) => `${base.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+
 /** Ask the endpoint which models it serves. Same idea as `opencode`'s discovery. */
 async function discoverModels(base, key, provider) {
   if (provider === 'anthropic') {
-    const r = await httpProbe(`${base}/models`, { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } });
+    const r = await httpProbe(`${anthropicApi(base)}/models`, { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } });
     const list = r.json?.data ?? r.json?.models ?? [];
     return Array.isArray(list) ? list.map((m) => String(m.id ?? m.name ?? '')).filter(Boolean) : [];
   }
@@ -183,7 +188,7 @@ async function discoverModels(base, key, provider) {
 /** One real completion, because /models answering does not mean a key works. */
 async function testCompletion(base, key, model, provider) {
   if (provider === 'anthropic') {
-    const r = await httpProbe(`${base}/messages`, {
+    const r = await httpProbe(`${anthropicApi(base)}/messages`, {
       method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model, max_tokens: 8, messages: [{ role: 'user', content: 'Say OK' }] }),
@@ -481,7 +486,9 @@ async function cmdInit(argv) {
 
   // ---- 3. sign-in ----
   heading('3. Sign-in');
-  const signIn = nonInteractive ? true : await confirm('Enable the local email sign-in? (DEV_LOGIN=1, for testing)', true);
+  // Off unless asked for: it signs anyone in as any email address, so it is a
+  // testing switch and not a default. Non-interactive also leaves it off.
+  const signIn = nonInteractive ? false : await confirm('Enable the local email sign-in? (DEV_LOGIN=1, for testing only)', false);
   patch.DEV_LOGIN = signIn ? '1' : '0';
   if (!signIn) {
     warn('Without DEV_LOGIN you need COMPOSIO_API_KEY for Google sign-in.');

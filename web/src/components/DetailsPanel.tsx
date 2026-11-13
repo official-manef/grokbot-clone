@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Routine } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { api, openPopup } from '../lib/api';
+import { useCapability } from '../lib/capabilities';
 import { botVars } from '../lib/colors';
 import { computerStatusText } from '../lib/computer';
 import { displayName, useSelectedBot, useStore } from '../store';
@@ -52,6 +53,8 @@ export function DetailsPanel() {
   const computer = useStore((s) => s.computer);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const set = useStore((s) => s.set);
+  const hasDesktop = useCapability('desktop');
+  const canConnect = useCapability('integrations');
   const [tab, setTab] = useState<'activity' | 'tasks' | 'library'>('activity');
   const [hideSuggested, setHideSuggested] = useState(() => { try { return localStorage.getItem('grokbot.hideSuggested') === '1'; } catch { return false; } });
   if (!bot) return null;
@@ -80,7 +83,7 @@ export function DetailsPanel() {
           </div>
         ) : (
           <div className="details__hero">
-            <ComputerScreen key={bot.id} bot={bot} variant="panel" paused={viewerOpen} onExpand={openComputer} />
+            {hasDesktop && <ComputerScreen key={bot.id} bot={bot} variant="panel" paused={viewerOpen} onExpand={openComputer} />}
             <div className="details__who">
               <BotAvatarFor bot={bot} size={36} />
               <div className="details__who-text">
@@ -88,9 +91,9 @@ export function DetailsPanel() {
                   <span className="details__who-name" title={displayName(bot)}>{displayName(bot)}</span>
                   {bot.model && <span className="details__model" title={bot.provider ? `${bot.provider} · ${bot.model}` : bot.model}>{bot.model}</span>}
                 </div>
-                <div className="details__who-sub">Computer {computerStatusText(computer).toLowerCase()}</div>
+                {hasDesktop && <div className="details__who-sub">Computer {computerStatusText(computer).toLowerCase()}</div>}
               </div>
-              <button type="button" className="btn btn--sm btn--secondary details__open" onClick={() => openComputer('watch')}>Open</button>
+              {hasDesktop && <button type="button" className="btn btn--sm btn--secondary details__open" onClick={() => openComputer('watch')}>Open</button>}
             </div>
           </div>
         )}
@@ -120,7 +123,7 @@ export function DetailsPanel() {
                 <MembersCard room={bot} />
               </section>
             )}
-            {bot.kind !== 'room' && !hideSuggested && (
+            {bot.kind !== 'room' && !hideSuggested && canConnect && (
               <section>
                 <div className="section-label section-label--row">
                   <span>Suggested</span>

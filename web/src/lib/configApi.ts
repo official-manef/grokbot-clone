@@ -10,7 +10,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     let msg = res.statusText;
-    try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
+    try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* not json */ }
     throw new ApiError(res.status, msg);
   }
   return res.json() as Promise<T>;
@@ -70,7 +70,7 @@ export const configApi = {
     });
     if (!res.ok) {
       let msg = res.statusText;
-      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
+      try { const j = (await res.json()) as { message?: string; error?: string }; msg = j.message || j.error || msg; } catch { /* not json */ }
       throw new ApiError(res.status, msg);
     }
     const type = res.headers.get('content-type') ?? '';
