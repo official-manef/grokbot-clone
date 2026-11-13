@@ -174,6 +174,45 @@ ls: cannot access '/mnt/c': No such file or directory
 **Viewer.** A raw WebSocket to the box returns `RFB 003.008\n`, so `vnc.ts` can keep its
 handshake code unchanged and only swap the upstream dial.
 
+### DESKTOP_MODE=mso — desktops without a container runtime
+
+`docker` is the default and the best isolation. `mso` exists for hosts where there is no
+usable Docker daemon (no socket access, no daemon, or an operator who wants the desktop on
+the host's own X server). It has the same surface and the same `box.ts` dispatch, so the
+tools and the viewer do not change.
+
+| Concern | `docker` | `mso` |
+| --- | --- | --- |
+| box | one container per user | one directory per user |
+| screen | display :0..:3 inside the box | host `Xvfb` on `:99`, `:91`, … |
+| capture | `grokbot-shot` in the image | `ffmpeg -f x11grab` |
+| input | `xdotool` in the image | vendored `xdotool` |
+| shell | as `bot` inside the box | as the service account on the host |
+| viewer | container websockify | loopback `x11vnc`, dialled over TCP |
+
+**The shell row is the tradeoff.** `mso` runs bot commands as the account running this
+service, which is the same power MSO itself grants and strictly more than a container's
+`bot` user. Use `docker` unless you cannot.
+
+Two details that are easy to get wrong, and are therefore asserted in
+`server/scripts/check-mso.ts`:
+
+* `screen-1` is display `:91`, not `:1`. The off-by-one opens a browser on a display that
+  nothing screenshots, and the tool then reports a black screen.
+* The vendored binaries need `LD_LIBRARY_PATH=server/vendor/usr/lib/x86_64-linux-gnu`.
+  Without it `xdotool` exits with `libxdo.so.3: cannot open shared object file`, which looks
+  like a broken desktop rather than an environment mistake.
+
+Displays self-heal: an Xvfb whose socket was unlinked still owns its display number, so
+`reclaimDisplay()` finds it in `/proc` — matching only a command line that names *that*
+display — and clears the lock before binding.
+
+Vendoring needs no root:
+
+```bash
+./server/scripts/install-desktop-deps.sh   # xdotool, x11vnc, fluxbox -> server/vendor/
+```
+
 **Known limits at this commit.** The MSO desktop observer API is in a separate repo and not
 yet merged. `orgo.ts` remains compiled but untested since upstream; `DESKTOP_MODE=orgo` is
 for rollback only. Four containers at 8 GB each is 32 GB of RAM, so `DESKTOP_RAM_GB` is the

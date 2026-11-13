@@ -15,3 +15,9 @@ docs/INTERNAL-*.md
 docs/SPEC.md
 web/screenshots/
 tests/out/
+
+# Vendored desktop binaries for DESKTOP_MODE=mso (server/scripts/install-desktop-deps.sh).
+server/vendor/
+
+# Per-bot desktops: browser profiles, cookies, saved files.
+.grokbot/

@@ -1,19 +1,59 @@
 import type { IncomingMessage, Server } from 'node:http';
+import net from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
 import { userFromCookieHeader } from './lib/auth.js';
 import { vncAuthResponse } from './lib/des.js';
-import { orgo } from './orgo.js';
+import { box } from './box.js';
 import { readyScreen, screenFor } from './computer.js';
 import { viewerClosed, viewerOpened } from './idle.js';
 
 /**
- * VNC relay: browser <-> our server <-> Orgo websockify.
- * The server performs the RFB handshake upstream with the computer's VNC password
- * (which is root-equivalent and never reaches the browser), then offers the browser
- * an unauthenticated RFB session. In "watch" mode, client input messages
- * (KeyEvent, PointerEvent, ClientCutText) are dropped server-side.
+ * VNC relay: browser <-> our server <-> the box's RFB server.
+ * The server performs the RFB handshake upstream, so any VNC password stays server-side,
+ * then offers the browser an unauthenticated RFB session. In "watch" mode, client input
+ * messages (KeyEvent, PointerEvent, ClientCutText) are dropped server-side.
+ *
+ * The upstream transport differs by backend: Docker and Orgo speak WebSocket
+ * (websockify), while DESKTOP_MODE=mso dials x11vnc over plain TCP. `Upstream` is the
+ * only thing the relay itself needs to know about.
  */
+
+/** A byte pipe to the upstream RFB server, over WebSocket or TCP. */
+interface Upstream {
+  send(b: Buffer): void;
+  close(): void;
+  onData(fn: (b: Buffer) => void): void;
+  onClose(fn: (reason: string) => void): void;
+  onError(fn: (e: Error) => void): void;
+  ready(): Promise<void>;
+}
+
+/** websockify (Orgo, Docker). */
+function wsUpstream(url: string): Upstream {
+  const ws = new WebSocket(url, ['binary']);
+  return {
+    send: (b) => { if (ws.readyState === WebSocket.OPEN) ws.send(b); },
+    close: () => { try { ws.close(); } catch { /* gone */ } },
+    onData: (fn) => ws.on('message', (d: Buffer) => fn(Buffer.from(d))),
+    onClose: (fn) => ws.on('close', (code, reason) => fn(`upstream ${code} ${reason}`)),
+    onError: (fn) => ws.on('error', (e) => fn(e as Error)),
+    ready: () => new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej); }),
+  };
+}
+
+/** Raw RFB (DESKTOP_MODE=mso's x11vnc). Dialled over loopback only. */
+function tcpUpstream(port: number): Upstream {
+  const sock = net.connect({ port, host: '127.0.0.1' });
+  return {
+    send: (b) => { if (!sock.destroyed) sock.write(b); },
+    close: () => { try { sock.destroy(); } catch { /* gone */ } },
+    onData: (fn) => sock.on('data', (d: Buffer) => fn(d)),
+    onClose: (fn) => sock.on('close', () => fn('upstream closed')),
+    onError: (fn) => sock.on('error', (e) => fn(e)),
+    ready: () => new Promise<void>((res, rej) => { sock.once('connect', () => res()); sock.once('error', rej); }),
+  };
+}
 
 class ByteQueue {
   private buf = Buffer.alloc(0);
@@ -140,7 +180,7 @@ export function attachVncRelay(server: Server) {
 async function relay(client: WebSocket, userId: string, botId: string, mode: 'watch' | 'control') {
   const fromClient = new ByteQueue();
   const fromUp = new ByteQueue();
-  let upstream: WebSocket | null = null;
+  let upstream: Upstream | null = null;
   let piping = false;
   const filter = new WatchFilter();
   const closeAll = (code = 1000, reason = '') => {
@@ -151,7 +191,8 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
   client.on('message', (data: Buffer) => {
     if (!piping) return fromClient.push(Buffer.from(data));
     const fwd = mode === 'watch' ? filter.feed(Buffer.from(data)) : Buffer.from(data);
-    if (fwd.length && upstream?.readyState === WebSocket.OPEN) upstream.send(fwd);
+    // `send` is a no-op when the pipe is gone, so no readyState check is needed here.
+    if (fwd.length) upstream?.send(fwd);
   });
   client.on('close', () => { viewerClosed(userId); fromClient.close(new Error('client closed')); try { upstream?.close(); } catch { /* */ } });
   viewerOpened(userId); // keeps the computer awake while someone is watching (see idle.ts)
@@ -159,17 +200,21 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
   try {
     const { computerId, screenId } = await screenFor(userId, botId);
     // A screen nobody has used yet is bare; set it up while the person is already watching.
-    readyScreen(userId, botId).catch(() => {});
-    const { password } = await orgo.vncPassword(computerId);
-    const upUrl = `wss://www.orgo.ai/desktops/${computerId}/ws/websockify?token=${encodeURIComponent(password)}${screenId !== 'default' ? `&screen=${encodeURIComponent(screenId)}` : ''}`;
-    upstream = new WebSocket(upUrl, ['binary']);
-    upstream.on('message', (data: Buffer) => {
-      if (!piping) return fromUp.push(Buffer.from(data));
+    void readyScreen(userId, botId).catch(() => {});
+    const upstreamInfo = await box.computer.vncUpstream(computerId, screenId);
+    const password = upstreamInfo.password;
+    // A raw `tcp://` upstream is x11vnc; anything else is websockify.
+    upstream = upstreamInfo.url.startsWith('tcp://')
+      ? tcpUpstream(Number(new URL(upstreamInfo.url).port))
+      : wsUpstream(upstreamInfo.url);
+    const up = upstream;
+    up.onData((data) => {
+      if (!piping) return fromUp.push(data);
       if (client.readyState === WebSocket.OPEN) client.send(data);
     });
-    upstream.on('close', (code, reason) => { fromUp.close(new Error(`upstream closed ${code}`)); closeAll(1000, `upstream ${code} ${reason}`); });
-    upstream.on('error', (e) => { fromUp.close(e as Error); closeAll(1011, String(e)); });
-    await new Promise<void>((res, rej) => { upstream!.once('open', () => res()); upstream!.once('error', rej); });
+    up.onClose((reason) => { fromUp.close(new Error(reason)); closeAll(1000, reason); });
+    up.onError((e) => { fromUp.close(e); closeAll(1011, String(e)); });
+    await up.ready();
 
     const serverInit = await upstreamHandshake(fromUp, (b) => upstream!.send(b), password);
     await browserHandshake(fromClient, (b) => client.send(b), serverInit);

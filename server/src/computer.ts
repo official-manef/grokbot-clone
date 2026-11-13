@@ -8,24 +8,28 @@ import { getLive } from './store.js';
 import type { ComputerState } from './types.js';
 
 /**
- * One Orgo computer for the whole team (ORGO_COMPUTER_ID), one screen per bot. The primary bot's
- * engine already lives on that computer's own desktop, so it keeps the default screen; every other
- * bot gets a screen of its own, dressed in its colour (see desk.ts). The computer is never created,
- * suspended or deleted from here: it is somebody's working machine.
+ * Where a user's bots work. Two shapes:
+ *
+ * - Local (`docker`, `mso`): one box per user, created on first use, one screen per bot.
+ * - Shared (`orgo`): one computer for the whole team (ORGO_COMPUTER_ID), one screen per
+ *   bot. The primary bot's engine already lives on that computer's own desktop, so it
+ *   keeps the default screen; every other bot gets a screen of its own, dressed in its
+ *   colour (see desk.ts). That machine is somebody's working computer: it is never
+ *   created, suspended or deleted from here.
  */
 
-/** Orgo allows this many screens on one Linux computer, the default one included. */
+/** Screens per computer, the default one included. Every backend caps at four. */
 export const MAX_SCREENS = 4;
 
 export interface BotScreen { computerId: string; screenId: string; width?: number; height?: number }
 
-/** True when the bots run on a local Docker box instead of the shared computer. */
-const perUserBoxes = () => desktopMode() === 'docker';
+/** True when each user gets a box of their own instead of a share of one computer. */
+const perUserBoxes = () => desktopMode() === 'docker' || desktopMode() === 'mso';
 
 /**
- * Id of the computer this user's bots work on. On Docker it is that user's own
- * container, so it depends on who is asking; on a shared computer it is
- * ORGO_COMPUTER_ID and is the same for everyone.
+ * Id of the computer this user's bots work on. For a local backend it is that user's own
+ * box, so it depends on who is asking; on the shared computer it is ORGO_COMPUTER_ID and
+ * is the same for everyone.
  */
 function computerId(userId?: string): string {
   if (perUserBoxes()) {
@@ -49,8 +53,8 @@ function rowFor(userId: string) {
 
 function setStatus(userId: string, status: ComputerState['status'], error: string | null = null) {
   const r = rowFor(userId);
-  // On Docker the row already holds this user's own container name; never
-  // replace it with the shared computer id.
+  // On a local backend the row already holds this user's own box; never replace
+  // it with the shared computer id.
   const id = perUserBoxes() ? r.orgo_id : env.orgoComputerId || null;
   db.prepare('UPDATE computers SET status=?, orgo_id=?, error=?, updated_at=? WHERE user_id=?').run(status, id, error, now(), userId);
   hub.emit(userId, { type: 'computer', state: computerState(userId) });
@@ -66,22 +70,30 @@ export function computerState(userId: string): ComputerState {
   return { status: r.status, orgoId: env.orgoComputerId || r.orgo_id, error: r.error, screens, maxScreens: Math.min(env.maxBots, MAX_SCREENS) };
 }
 
+/**
+ * Backend status -> the four-ish states the UI knows. Every value a backend can
+ * report belongs here: an unknown word used to become `starting`, which then sat
+ * in a 240 s wake loop waiting for a container that had already died.
+ */
 function mapStatus(s: string): ComputerState['status'] {
   if (s === 'running') return 'running';
   if (s === 'creating') return 'creating';
-  if (s === 'suspended') return 'suspended';
+  if (s === 'suspended' || s === 'exited' || s === 'dead' || s === 'paused') return 'suspended';
   if (s === 'suspending') return 'suspending';
   if (s === 'resuming') return 'resuming';
-  if (s === 'frozen' || s === 'stopped') return 'stopped';
-  if (s === 'error') return 'error';
+  if (s === 'frozen' || s === 'stopped' || s === 'created' || s === 'restarting' || s === 'removing') return 'stopped';
+  if (s === 'error' || s === 'absent') return s === 'absent' ? 'stopped' : 'error';
   return 'starting';
 }
 
 async function waitRunning(id: string, timeoutMs = 240_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    const c = perUserBoxes() ? await box.computer.get(id) : await orgo.getComputer(id);
-    if (mapStatus((c as any).asleep ? 'suspended' : c.status) === 'running') return;
+    const c = await box.computer.get(id);
+    const status = mapStatus((c as any).asleep ? 'suspended' : c.status);
+    if (status === 'running') return;
+    // Nothing is coming. Bail now instead of waiting out the timeout.
+    if (status === 'error' || status === 'stopped') throw new Error(`The computer is ${status === 'error' ? 'in an error state' : 'not running'}; it did not start.`);
     await new Promise((r) => setTimeout(r, 3000));
   }
   throw new Error('Timed out waiting for the computer to start');
@@ -90,7 +102,7 @@ async function waitRunning(id: string, timeoutMs = 240_000) {
 let checkedAt = 0;
 let inflight: Promise<string> | null = null;
 
-/** Make sure the computer is awake (and, on Docker, exists). Returns its id. */
+/** Make sure the computer exists and is awake. Returns its id. */
 export function ensureComputer(userId: string): Promise<string> {
   if (perUserBoxes()) return ensureUserBox(userId);
   const id = computerId();
@@ -99,22 +111,23 @@ export function ensureComputer(userId: string): Promise<string> {
   inflight = (async () => {
     try {
       const c = await orgo.getComputer(id);
-      if (c.status === 'running' && !c.asleep) {
+      const status = mapStatus(c.asleep ? 'suspended' : c.status);
+      if (status === 'running') {
         if (rowFor(userId).status !== 'running') setStatus(userId, 'running');
-      } else if (c.status === 'suspended' || c.status === 'suspending' || c.asleep) {
+      } else if (status === 'suspended' || status === 'suspending') {
         console.log(`[computer] waking ${id} (was ${c.status})`);
         setStatus(userId, 'resuming');
         for (let i = 0; i < 40 && (await orgo.getComputer(id)).status === 'suspending'; i++) await new Promise((res) => setTimeout(res, 3000));
         await orgo.resume(id);
         await waitRunning(id);
         setStatus(userId, 'running');
-      } else if (c.status === 'frozen' || c.status === 'stopped' || c.status === 'error') {
+      } else if (status === 'stopped' || status === 'error') {
         setStatus(userId, 'starting');
         await orgo.start(id);
         await waitRunning(id);
         setStatus(userId, 'running');
       } else {
-        setStatus(userId, mapStatus(c.status));
+        setStatus(userId, 'starting');
         await waitRunning(id);
         setStatus(userId, 'running');
       }
@@ -133,7 +146,7 @@ export function ensureComputer(userId: string): Promise<string> {
 
 const boxInflight = new Map<string, Promise<string>>();
 
-/** The user's own container: create it the first time, wake it afterwards. */
+/** The user's own box: create it the first time, wake it afterwards. */
 function ensureUserBox(userId: string): Promise<string> {
   const running = boxInflight.get(userId);
   if (running) return running;
@@ -156,7 +169,7 @@ function ensureUserBox(userId: string): Promise<string> {
         if (r.status !== 'running') setStatus(userId, 'running');
         return c.id;
       }
-      // A container that was stopped is Docker's suspend: start it again.
+      // A box that was stopped is this backend's suspend: start it again.
       setStatus(userId, 'resuming');
       await box.computer.resume(c.id);
       await waitRunning(c.id);
@@ -180,7 +193,6 @@ function deskBot(botId: string): DeskBot | null {
 
 const isPrimaryEngine = (botId: string) => (db.prepare('SELECT engine FROM bots WHERE id=?').get(botId) as any)?.engine === 'primary';
 
-/** The primary bot's own Chrome (when PRIMARY_CDP_URL names one) is never started or stopped by us. */
 const managesChrome = (botId: string) => !(isPrimaryEngine(botId) && env.primaryCdpUrl);
 
 const verified = new Map<string, number>();
@@ -191,7 +203,7 @@ function saveSize(botId: string, s: OrgoScreen | undefined) {
   if (s?.width && s?.height) db.prepare('UPDATE screens SET width=?, height=? WHERE bot_id=?').run(s.width, s.height, botId);
 }
 
-/** This bot's screen on the shared computer; leases one the first time. */
+/** This bot's screen on its computer; leases one the first time. */
 export function screenFor(userId: string, botId: string): Promise<BotScreen> {
   const running = leasing.get(botId);
   if (running) return running;
@@ -223,7 +235,8 @@ async function lease(userId: string, botId: string): Promise<BotScreen> {
     }
   }
 
-  const taken = new Set((db.prepare('SELECT screen_id FROM screens').all() as any[]).map((r) => r.screen_id as string));
+  // Screens are per user: another account's screens on the same computer are not ours to take.
+  const taken = new Set((db.prepare('SELECT screen_id FROM screens WHERE user_id=?').all(userId) as any[]).map((r) => r.screen_id as string));
   const existing = await orgo.listScreens(id);
   let screen: OrgoScreen | undefined;
   if (isPrimaryEngine(botId)) {
@@ -243,9 +256,10 @@ async function lease(userId: string, botId: string): Promise<BotScreen> {
 }
 
 /**
- * Pick this bot's display on a Docker box. The container is created with every
- * display already running, so nothing is provisioned here: the primary engine
- * keeps index 0 (:99) and every other bot takes the lowest free index.
+ * Pick this bot's display on a local box. Docker's container is created with every
+ * display already running, and mso creates a display lazily, so nothing is provisioned
+ * here: the primary engine keeps index 0 (:99) and every other bot takes the lowest free
+ * index.
  */
 function leaseBoxScreen(userId: string, botId: string, computer: string): BotScreen {
   const mine = db.prepare('SELECT screen_id FROM screens WHERE bot_id=?').get(botId) as any;
@@ -253,7 +267,7 @@ function leaseBoxScreen(userId: string, botId: string, computer: string): BotScr
     db.prepare('UPDATE screens SET last_used_at=? WHERE bot_id=?').run(now(), botId);
     return { computerId: computer, screenId: mine.screen_id };
   }
-  const taken = new Set((db.prepare('SELECT screen_id FROM screens').all() as any[]).map((r) => r.screen_id as string));
+  const taken = new Set((db.prepare('SELECT screen_id FROM screens WHERE user_id=?').all(userId) as any[]).map((r) => r.screen_id as string));
   const primary = isPrimaryEngine(botId);
   let index = primary && !taken.has(screenIdFor(0)) ? 0 : -1;
   if (index < 0) {
@@ -269,13 +283,14 @@ function leaseBoxScreen(userId: string, botId: string, computer: string): BotScr
 }
 
 /**
- * The bot's screen, dressed as its own computer (wallpaper, dock, its Chrome on its home screen).
- * Dressing happens once per server run per bot, and again when `redress` is set (rename, new colour).
+ * The bot's screen, dressed as its own computer (wallpaper, dock, its Chrome on its home
+ * screen). Dressing happens once per server run per bot, and again when `redress` is set
+ * (rename, new colour).
  */
 export async function readyScreen(userId: string, botId: string, opts: { redress?: boolean } = {}): Promise<BotScreen> {
   const s = await screenFor(userId, botId);
-  // The Docker image starts its own window manager and wallpaper per display,
-  // so there is nothing to dress.
+  // Docker's image starts its own window manager and wallpaper per display; mso's
+  // displays are host Xvfb, so only a shared Orgo computer needs dressing.
   if (perUserBoxes()) return s;
   if (opts.redress) dressing.delete(botId);
   let d = dressing.get(botId);
@@ -300,11 +315,12 @@ export function cdpUrlFor(botId: string, screenId: string): string {
 }
 
 /**
- * Called before a bot starts working: its screen is leased and dressed, and the browser we run for it
- * answers. Without this a bot's first turn finds no browser and goes off to start one of its own.
+ * Called before a bot starts working: its screen is leased and dressed, and the browser we
+ * run for it answers. Without this a bot's first turn finds no browser and goes off to
+ * start one of its own.
  */
 export async function screenForWork(userId: string, botId: string): Promise<void> {
-  if (!env.orgoComputerId) return;
+  if (!env.orgoComputerId && !perUserBoxes()) return;
   if (!managesChrome(botId)) {
     // It brings its own browser, so nothing it needs depends on the dressing: don't make it wait.
     void readyScreen(userId, botId).catch((e) => console.warn(`[computer] screen not ready for ${botId}: ${e?.message ?? e}`));
@@ -340,13 +356,13 @@ export async function releaseScreen(botId: string): Promise<void> {
   db.prepare('DELETE FROM screens WHERE bot_id=?').run(botId);
   dressing.delete(botId);
   verified.delete(botId);
-  if (mine.screen_id !== 'default') {
+  if (mine.screen_id !== 'default' && !perUserBoxes()) {
     try { await undressScreen(botId, mine.screen_id); } catch (e: any) { console.warn(`[computer] undress failed: ${e?.message ?? e}`); }
   }
   hub.emit(mine.user_id, { type: 'computer', state: computerState(mine.user_id) });
 }
 
-/** A deleted bot leaves nothing behind on the computer: its browser profile and its Library folder go. */
+/** A deleted bot leaves nothing behind on its computer: its browser profile and its Library folder go. */
 export async function forgetBotFiles(botId: string): Promise<void> {
   if (!/^bot_[\w-]+$/.test(botId)) return;
   const root = boxGrokbot();
@@ -356,13 +372,24 @@ export async function forgetBotFiles(botId: string): Promise<void> {
     .catch(() => null);
 }
 
-/** The shared computer is never suspended from the app (other things live on it). */
-export async function suspendComputer(_userId: string, _reason = 'manual'): Promise<void> {}
+/** Stop the user's own box. On the shared computer this is a no-op: other things live there. */
+export async function suspendComputer(userId: string, _reason = 'manual'): Promise<void> {
+  if (!perUserBoxes()) return;
+  const r = rowFor(userId);
+  if (!r.orgo_id) return;
+  setStatus(userId, 'suspending');
+  try {
+    await box.computer.suspend(r.orgo_id);
+    setStatus(userId, 'suspended');
+  } catch (e: any) {
+    setStatus(userId, 'error', String(e?.message ?? e));
+  }
+}
 
-/** Refresh status and screen sizes from Orgo (cheap; used when the UI opens). */
+/** Refresh status and screen sizes from the backend (cheap; used when the UI opens). */
 export async function refreshComputer(userId: string): Promise<ComputerState> {
-  // On Docker the box is this user's own container, so ask the backend instead of
-  // the shared-computer id (which is legitimately empty in that mode).
+  // On a local backend the box is this user's own, so ask the backend instead of the
+  // shared-computer id (which is legitimately empty in that mode).
   if (perUserBoxes()) {
     const r = rowFor(userId);
     if (!r.orgo_id) return computerState(userId);
