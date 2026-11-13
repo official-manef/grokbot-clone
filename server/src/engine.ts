@@ -179,7 +179,9 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     // up pointing at a provider it has no key for. When this app has a BYOK
     // endpoint, that endpoint becomes the model rather than a broken inheritance.
     if (env.llm.base && env.llm.key) {
-      cfg.model = { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
+      cfg.model = env.llmProvider === 'anthropic'
+        ? { default: env.llm.model, provider: 'anthropic' }
+        : { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
       delete cfg.providers;
       delete cfg.custom_providers;
       delete cfg.fallback_model;
@@ -215,11 +217,17 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     if (v && !vars[k]) vars[k] = v;
   }
   // A BYOK endpoint from this app's own .env has to reach the agent, or the
-  // LLM_* block would be configuration the bots never see. Hermes reads the
-  // standard provider names, so the generic pair is mapped onto OpenAI's.
-  if (env.llm.base && env.llm.key && !vars.OPENAI_BASE_URL) {
-    vars.OPENAI_BASE_URL = env.llm.base;
-    vars.OPENAI_API_KEY = env.llm.key;
+  // LLM_* block would be configuration the bots never see. Hermes reads each
+  // provider's own variable names, so the generic pair is mapped onto the one
+  // that matches the protocol.
+  if (env.llm.base && env.llm.key) {
+    if (env.llmProvider === 'anthropic') {
+      if (!vars.ANTHROPIC_API_KEY) vars.ANTHROPIC_API_KEY = env.llm.key;
+      if (!vars.ANTHROPIC_BASE_URL) vars.ANTHROPIC_BASE_URL = env.llm.base;
+    } else if (!vars.OPENAI_BASE_URL) {
+      vars.OPENAI_BASE_URL = env.llm.base;
+      vars.OPENAI_API_KEY = env.llm.key;
+    }
   }
   Object.assign(vars, { API_SERVER_ENABLED: 'true', API_SERVER_KEY: key, API_SERVER_PORT: String(b.engine_port), API_SERVER_HOST: '127.0.0.1' });
   if (cdp) vars.BROWSER_CDP_URL = cdp; else delete vars.BROWSER_CDP_URL;

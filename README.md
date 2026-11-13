@@ -35,6 +35,23 @@ Give a bot a job, connect the apps it needs, and follow its work in chat. Each b
 
 The interface is modeled on Grok Bot. Underneath, every bot is a Hermes agent, so it can run on the model subscriptions you already pay for (Claude, ChatGPT, Grok and others) or on API keys.
 
+## Install
+
+```bash
+git clone git@github.com:official-manef/grokbot-clone.git
+cd grokbot-clone
+npm ci
+node bin/gb init      # guided: model endpoint, computer, sign-in
+node bin/gb doctor    # verify every capability
+npm run dev
+```
+
+`gb` is the command line: it asks for a base URL and an API key, offers the
+models the endpoint actually serves, sends one real request to prove the key
+works, and writes `.env` without ever printing a secret. Both OpenAI-compatible
+endpoints and Anthropic Claude are first-class choices. See
+[`docs/CLI.md`](docs/CLI.md).
+
 ## What you get
 
 | | |
@@ -180,6 +197,7 @@ from: `DESKTOP_MODE` picks the screen backend (`docker`, `orgo`, `mso`, `disable
 
 ```bash
 docker build -t grokbot-desktop:latest server/desktop   # the box a bot works in
+gb doctor                                              # then: is it all there?
 ```
 
 Inside that container a bot gets four X displays, `xdotool` for input, and a `shell` that runs

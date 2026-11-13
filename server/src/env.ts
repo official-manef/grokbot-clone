@@ -81,6 +81,13 @@ export const env = {
 
   // ---- BYOK capabilities ----
   llm: { base: llmBase, key: llmKey, model: llmModel } satisfies Endpoint,
+  /**
+   * Which wire protocol the endpoint speaks, because "an API key and a URL" is
+   * not enough to pick a client: OpenAI-compatible endpoints use chat or
+   * responses, Anthropic has its own. `anthropic` also tells engine.ts to hand
+   * ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL to Hermes instead of OPENAI_*.
+   */
+  llmProvider: (process.env.LLM_PROVIDER?.trim() || 'openai') as 'openai' | 'anthropic',
   /** chat = /chat/completions, responses = /responses. Endpoints differ. */
   llmProtocol: (process.env.LLM_PROTOCOL?.trim() || 'responses') as 'responses' | 'chat',
   /** Vendor-hosted tools (web_search, x_search) exist only on vendor endpoints. */
