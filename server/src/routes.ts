@@ -285,7 +285,12 @@ api.post('/bots/:id/fresh', (c) => {
 });
 
 api.post('/approvals/:id', async (c) => {
-  const { decision } = await c.req.json<{ decision: 'allow' | 'always' | 'deny' }>();
+  // The body is user-controlled: a typo must not read as consent.
+  const body = await c.req.json<{ decision?: unknown }>().catch(() => ({}) as { decision?: unknown });
+  const decision = body.decision;
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
+    return c.json({ error: 'decision must be allow, always or deny' }, 400);
+  }
   try { resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
   return c.json({ ok: true });
 });

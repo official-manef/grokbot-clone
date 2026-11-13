@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -69,12 +70,28 @@ const composioKey = alias('COMPOSIO_API_KEY', 'COMPOSIO_API_KEY') ?? '';
 
 const hermesHome = process.env.HERMES_HOME_PRIMARY ?? path.join(os.homedir(), '.hermes');
 
+/**
+ * Session signing secret. Sessions themselves are opaque rows in `auth_sessions`,
+ * but SESSION_SECRET keys two HMACs: the owner sign-in key and the bearer token each
+ * agent uses on /mcp/<bot>. An empty value would make both a public constant — anyone
+ * could mint an owner session or call the MCP endpoint — so a missing secret falls
+ * back to a random per-process value. That closes the hole and costs only this: agent
+ * configs written before a restart no longer match, so they are rewritten on boot.
+ */
+const sessionSecret = (() => {
+  const given = process.env.SESSION_SECRET?.trim();
+  if (given) return given;
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.warn('[env] SESSION_SECRET is unset: using a random per-process secret. Owner sign-in links and agent MCP tokens will not survive a restart. Set SESSION_SECRET to keep them.');
+  return generated;
+})();
+
 export const env = {
   port: Number(process.env.PORT ?? 8787),
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   /** Public URL of this server, used for OAuth callbacks. */
   serverUrl: process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`,
-  sessionSecret: process.env.SESSION_SECRET?.trim() || '',
+  sessionSecret,
   devLogin: process.env.DEV_LOGIN === '1',
   dbPath: process.env.DB_PATH ?? new URL('../../data/grokbot.db', import.meta.url).pathname,
   composioKey,

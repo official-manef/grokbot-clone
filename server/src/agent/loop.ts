@@ -208,6 +208,9 @@ export function expireStaleApprovals() {
 
 /** Resolve an approval card from the UI. */
 export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny') {
+  // Anything that is not one of the three words is a deny. A typo, null or a missing
+  // field used to fall through the ternaries below and land on 'allowed'.
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') throw new Error('invalid decision');
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) throw new Error('not found');
   if (ap.status !== 'pending') return;
