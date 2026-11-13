@@ -173,6 +173,18 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     const primary = readYaml(path.join(env.hermesHome, 'config.yaml'));
     for (const k of SHARED_CONFIG) if (primary[k] !== undefined) cfg[k] = primary[k];
     cfg.agent = { reasoning_effort: 'medium' };
+    // An inherited model names a provider the primary agent knows about, and that
+    // provider's credentials live in ITS .env. A managed home only inherits
+    // SHARED_ENV, so inheriting the model without the provider is how a bot ends
+    // up pointing at a provider it has no key for. When this app has a BYOK
+    // endpoint, that endpoint becomes the model rather than a broken inheritance.
+    if (env.llm.base && env.llm.key) {
+      cfg.model = { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
+      delete cfg.providers;
+      delete cfg.custom_providers;
+      delete cfg.fallback_model;
+      delete cfg.fallback_providers;
+    }
   }
   cfg.platform_toolsets = { ...(cfg.platform_toolsets ?? {}), api_server: ['hermes-api-server', ...(display ? ['computer_use'] : [])] };
   cfg.terminal = { ...(cfg.terminal ?? {}), cwd };
@@ -201,6 +213,13 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
   for (const k of SHARED_ENV) {
     const v = primaryEnv[k] ?? process.env[k];
     if (v && !vars[k]) vars[k] = v;
+  }
+  // A BYOK endpoint from this app's own .env has to reach the agent, or the
+  // LLM_* block would be configuration the bots never see. Hermes reads the
+  // standard provider names, so the generic pair is mapped onto OpenAI's.
+  if (env.llm.base && env.llm.key && !vars.OPENAI_BASE_URL) {
+    vars.OPENAI_BASE_URL = env.llm.base;
+    vars.OPENAI_API_KEY = env.llm.key;
   }
   Object.assign(vars, { API_SERVER_ENABLED: 'true', API_SERVER_KEY: key, API_SERVER_PORT: String(b.engine_port), API_SERVER_HOST: '127.0.0.1' });
   if (cdp) vars.BROWSER_CDP_URL = cdp; else delete vars.BROWSER_CDP_URL;
