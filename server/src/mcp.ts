@@ -4,7 +4,7 @@ import { getBotRow } from './store.js';
 import { composioTools } from './composio.js';
 import { mcpToken, primaryBotId } from './engine.js';
 import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, requestApproval, turnDepth } from './agent/loop.js';
-import { policyFor, runComposioTool, toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
+import { availableTools, policyFor, runComposioTool, toolMap, type ToolCtx } from './agent/tools.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -41,7 +41,9 @@ function caller(slug: string, auth: string | undefined): { botId: string | null 
 }
 
 async function listTools(botId: string | null) {
-  const own = TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters }));
+  // Only the tools this deployment can actually run: a capability that is off must not
+  // appear in the list, or the model calls it and the user reads a capability error.
+  const own = availableTools().map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters }));
   const bot = botId ? getBotRow(botId) : null;
   if (!bot) return own;
   const apps = (await composioTools(bot.user_id))

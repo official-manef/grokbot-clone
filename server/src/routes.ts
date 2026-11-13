@@ -34,11 +34,12 @@ function hashPick<T>(id: string, list: T[]): T {
 /** Thrown for things the user can fix; the message is shown to them. */
 class UserError extends Error {}
 
-const agentCount = () => (db.prepare("SELECT COUNT(*) n FROM bots WHERE COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0").get() as any).n as number;
+const agentCount = (userId: string) => (db.prepare("SELECT COUNT(*) n FROM bots WHERE user_id=? AND COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0").get(userId) as any).n as number;
 
 function createBot(userId: string, b: { name: string; label?: string; description?: string; instructions?: string; avatarShape?: string; avatarColor?: string; mode?: string; isPrimary?: boolean }) {
-  // Every bot needs a screen of its own on the one shared computer.
-  if (agentCount() >= env.maxBots) throw new UserError(`The team is full: the computer has room for ${env.maxBots} bots. Remove one to add another.`);
+  // Every bot needs a screen of its own, and screens belong to one account: another
+  // user's bots must not count against this team.
+  if (agentCount(userId) >= env.maxBots) throw new UserError(`The team is full: the computer has room for ${env.maxBots} bots. Remove one to add another.`);
   const id = newId('bot');
   const shape = SHAPES.includes(b.avatarShape as AvatarShape) ? b.avatarShape : hashPick(id, SHAPES.slice(0, 13));
   const color = COLORS.includes(b.avatarColor as AvatarColor) ? b.avatarColor : hashPick(id, COLORS.filter((c) => c !== 'black'));
@@ -380,9 +381,12 @@ api.delete('/memories/:id', (c) => {
 
 api.get('/computer', async (c) => c.json({ computer: await refreshComputer(c.get('user').id) }));
 
-api.post('/computer/ensure', (c) => {
+/** Make sure the computer exists and is awake, then answer with its state. */
+api.post('/computer/ensure', async (c) => {
   const userId = c.get('user').id;
-  ensureComputer(userId).catch((e) => console.warn('[computer] ensure failed', e.message));
+  // Awaited: the old fire-and-forget answered with a state from before the wake.
+  const error = await ensureComputer(userId).then(() => null, (e) => String(e?.message ?? e));
+  if (error) console.warn('[computer] ensure failed', error);
   return c.json({ computer: computerState(userId) });
 });
 

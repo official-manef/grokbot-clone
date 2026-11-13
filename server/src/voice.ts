@@ -3,7 +3,6 @@
 // This module mints the ephemeral secret, builds the voice agent's prompt and tools, serves the relay
 // tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
 import { Hono } from 'hono';
-import OpenAI from 'openai';
 import { db, now } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
@@ -13,16 +12,14 @@ import { enqueue } from './agent/loop.js';
 import { computerState } from './computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
 import { listMemories } from './engine-memory.js';
-
+import { mintRealtimeSecret, synthesize, transcribe, listVoices as providerVoices, ttsConfigured, sttConfigured, realtimeConfigured } from './providers/speech.js';
+import { llm, model as llmModel } from './providers/llm.js';
 import { CapabilityError } from './lib/capability-error.js';
 
 export const voiceApi = new Hono<AuthVars>();
 
-const XAI = 'https://api.x.ai/v1';
-const VOICE_MODEL = process.env.XAI_VOICE_MODEL ?? 'grok-voice-latest';
-const STT_MODEL = process.env.XAI_STT_MODEL ?? 'grok-voice-transcribe-2.0';
+const VOICE_MODEL = env.realtime?.model ?? 'grok-voice-latest';
 const SAMPLE_RATE = 24000;
-const xaiHeaders = () => ({ Authorization: `Bearer ${env.xaiKey}` });
 
 // ---------- voices / languages ----------
 
@@ -46,15 +43,13 @@ export const SPEEDS = [0.7, 0.85, 1, 1.15, 1.3, 1.5];
 let voiceCache: { at: number; voices: VoiceOption[] } | null = null;
 async function listVoices(): Promise<VoiceOption[]> {
   if (voiceCache && Date.now() - voiceCache.at < 3600_000) return voiceCache.voices;
-  try {
-    const r = await fetch(`${XAI}/tts/voices`, { headers: xaiHeaders(), signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as { voices?: { voice_id: string; name?: string; gender?: string }[] };
-    const voices = (j.voices ?? []).map((v) => ({ id: v.voice_id, name: v.name ?? v.voice_id, gender: v.gender }));
-    if (!voices.length) throw new Error('empty list');
-    voiceCache = { at: Date.now(), voices };
-  } catch (e: any) {
-    console.warn('[voice] voice list unavailable, using static list:', e?.message);
+  // Ask the configured TTS provider; fall back to the static catalogue so the
+  // picker still renders when the endpoint has no /audio/voices.
+  const fromProvider = ttsConfigured() ? await providerVoices() : null;
+  if (fromProvider?.length) {
+    voiceCache = { at: Date.now(), voices: fromProvider };
+  } else {
+    if (ttsConfigured()) console.warn('[voice] provider listed no voices; using static list');
     voiceCache = { at: Date.now() - 3000_000, voices: FALLBACK_VOICES }; // retry in ~10 min
   }
   return voiceCache.voices;
@@ -246,18 +241,18 @@ voiceApi.post('/session', async (c) => {
   if (!bot) return c.json({ error: 'not found' }, 404);
   const s = settingsOf(bot);
 
-  const r = await fetch(`${XAI}/realtime/client_secrets`, {
-    method: 'POST',
-    headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expires_after: { seconds: 300 } }),
-    signal: AbortSignal.timeout(15_000),
-  }).catch((e) => ({ ok: false, status: 0, text: async () => String(e?.message ?? e) }) as any);
-  if (!r.ok) {
-    const detail = await r.text().catch(() => '');
-    console.warn('[voice] client secret mint failed', r.status, detail.slice(0, 300));
-    return c.json({ error: 'Could not start a voice session' }, 502);
+  // The endpoint advertises whether it can host a call; a deployment without one
+  // answers 501 that names the env vars instead of failing at the WebSocket.
+  if (!realtimeConfigured()) return c.json(new CapabilityError('realtime').toJSON(), 501);
+  let minted: { clientSecret: string; websocketUrl: string; model: string };
+  try {
+    minted = await mintRealtimeSecret();
+  } catch (e: any) {
+    if (e instanceof CapabilityError) return c.json(e.toJSON(), 501);
+    console.warn('[voice] client secret mint failed', e?.status ?? '', String(e?.message ?? e).slice(0, 300));
+    return c.json({ error: 'realtime_unavailable', message: 'The voice provider rejected the session request.' }, 502);
   }
-  const secret = (await r.json()) as { value: string; expires_at: number };
+  const secret = { value: minted.clientSecret, expires_at: now() + 300 };
 
   const instructions = voiceInstructions(user.id, bot, s.language);
   const session: Record<string, unknown> = {
@@ -283,8 +278,8 @@ voiceApi.post('/session', async (c) => {
     callId,
     clientSecret: secret.value,
     expiresAt: secret.expires_at,
-    model: VOICE_MODEL,
-    websocketUrl: `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
+    model: minted.model,
+    websocketUrl: `${minted.websocketUrl}&client_secret=${encodeURIComponent(minted.clientSecret)}`,
     sampleRate: SAMPLE_RATE,
     instructions,
     voice: s.voice,
@@ -359,22 +354,13 @@ voiceApi.post('/tool', async (c) => {
   }
 });
 
-// Built on first use: upstream constructed this at import, so a deployment with
-// no model key crashed at boot instead of reporting a capability gap.
-let xaiClient: OpenAI | null = null;
-function xai(): OpenAI {
-  if (!xaiClient) {
-    if (!env.llm.key) throw new CapabilityError('llm');
-    xaiClient = new OpenAI({ apiKey: env.llm.key, baseURL: env.llm.base || XAI, timeout: 45_000 });
-  }
-  return xaiClient;
-}
-
 async function summarizeCall(botName: string, transcript: { role: string; text: string }[], tasks: string[]): Promise<string | null> {
   if (!transcript.length && !tasks.length) return null;
   const lines = transcript.map((t) => `${t.role === 'user' ? 'User' : botName}: ${t.text}`).join('\n').slice(-12_000);
-  const res: any = await xai().responses.create({
-    model: env.xaiModel,
+  // The BYOK adapter speaks whichever protocol the endpoint implements, so a call
+  // summary works on a chat-only gateway too.
+  const res: any = await llm().responses.create({
+    model: llmModel(),
     reasoning: { effort: 'low' },
     store: false,
     input: [
@@ -432,20 +418,20 @@ voiceApi.post('/preview', async (c) => {
   const language = p.language && langName(p.language) ? p.language : s.language;
   const text = String(p.text || `Hi, I'm ${bot?.name ?? 'your Bot'}. This is how I'll sound when we talk.`).slice(0, 400);
   const codec = p.codec === 'pcm' ? 'pcm' : 'mp3';
-  const r = await fetch(`${XAI}/tts`, {
-    method: 'POST',
-    headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice_id: voice, language, speed: clampSpeed(p.speed ?? s.speed), output_format: { codec, sample_rate: SAMPLE_RATE } }),
-    signal: AbortSignal.timeout(30_000),
-  }).catch(() => null);
-  if (!r?.ok) {
-    console.warn('[voice] tts failed', r?.status, (await r?.text().catch(() => ''))?.slice(0, 200));
-    return c.json({ error: 'Preview unavailable' }, 502);
+  // A deployment without a speech endpoint hides the button; calling anyway is a
+  // capability gap (501), not a provider failure (502).
+  if (!ttsConfigured()) return c.json(new CapabilityError('tts').toJSON(), 501);
+  try {
+    const out = await synthesize(text, { voice, speed: clampSpeed(p.speed ?? s.speed) });
+    return c.body(new Uint8Array(out.bytes), 200, {
+      'Content-Type': codec === 'pcm' ? `audio/pcm;rate=${SAMPLE_RATE}` : out.mime,
+      'Cache-Control': 'no-store',
+    });
+  } catch (e: any) {
+    if (e instanceof CapabilityError) return c.json(e.toJSON(), 501);
+    console.warn('[voice] tts failed', e?.status ?? '', String(e?.message ?? e).slice(0, 200));
+    return c.json({ error: 'tts_unavailable', message: 'Voice preview is unavailable from the configured provider.' }, 502);
   }
-  return c.body(Buffer.from(await r.arrayBuffer()), 200, {
-    'Content-Type': codec === 'pcm' ? `audio/pcm;rate=${SAMPLE_RATE}` : 'audio/mpeg',
-    'Cache-Control': 'no-store',
-  });
 });
 
 voiceApi.post('/stt', async (c) => {
@@ -454,16 +440,19 @@ voiceApi.post('/stt', async (c) => {
   if (!file || typeof file === 'string') return c.json({ error: 'file required' }, 400);
   if (file.size > 25 * 1024 * 1024) return c.json({ error: 'recording too long' }, 413);
   if (file.size < 200) return c.json({ text: '' });
-  const out = new FormData();
-  out.append('model', STT_MODEL);
+  if (!sttConfigured()) return c.json(new CapabilityError('stt').toJSON(), 501);
   const lang = String(form?.get('language') ?? '');
-  if (lang && lang !== 'auto' && /^[a-z]{2}$/.test(lang)) out.append('language', lang);
-  out.append('file', file, file.name || 'dictation.webm'); // must be last
-  const r = await fetch(`${XAI}/stt`, { method: 'POST', headers: xaiHeaders(), body: out, signal: AbortSignal.timeout(60_000) }).catch(() => null);
-  if (!r?.ok) {
-    console.warn('[voice] stt failed', r?.status, (await r?.text().catch(() => ''))?.slice(0, 200));
-    return c.json({ error: 'Transcription failed' }, 502);
+  try {
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const result = await transcribe(bytes, {
+      filename: file.name || 'dictation.webm',
+      mime: file.type || 'audio/webm',
+      language: lang && /^[a-z]{2}$/.test(lang) ? lang : undefined,
+    });
+    return c.json({ text: result.text });
+  } catch (e: any) {
+    if (e instanceof CapabilityError) return c.json(e.toJSON(), 501);
+    console.warn('[voice] stt failed', e?.status ?? '', String(e?.message ?? e).slice(0, 200));
+    return c.json({ error: 'stt_unavailable', message: 'Transcription is unavailable from the configured provider.' }, 502);
   }
-  const j = (await r.json()) as { text?: string };
-  return c.json({ text: (j.text ?? '').trim() });
 });

@@ -185,7 +185,9 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
         ? { default: env.llm.model, provider: env.llmProvider }
         : env.llmProvider === 'anthropic'
           ? { default: env.llm.model, provider: 'anthropic' }
-          : { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
+          // The endpoint's wire protocol decides the mode; hardcoding chat_completions
+          // is how a config said responses while the engine spoke chat.
+          : { default: env.llm.model, provider: 'openai', api_mode: env.llmProtocol === 'chat' ? 'chat_completions' : 'responses' };
       delete cfg.providers;
       delete cfg.custom_providers;
       delete cfg.fallback_model;

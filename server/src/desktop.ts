@@ -75,6 +75,22 @@ function containerNameFor(userId: string): string {
   return assertName(`grokbot-${userId.replace(/[^a-zA-Z0-9]/g, '').slice(-12)}`);
 }
 
+/** The bridge network this box owns. Its own network, with peer traffic off. */
+function networkFor(container: string): string {
+  return `${container}-net`;
+}
+
+/**
+ * Create the box's own bridge network (idempotent). `enable_icc=false` is the only
+ * place Docker accepts that setting: on the network, not on `docker run`. Without it
+ * every box shares `bridge` and any container can dial the next one's websockify,
+ * which has no password because only the host relay was ever supposed to reach it.
+ */
+async function ensureNetwork(network: string): Promise<void> {
+  const r = await docker(['network', 'create', '--opt', 'com.docker.network.bridge.enable_icc=false', network], { timeoutMs: 30_000 });
+  if (r.code !== 0 && !/already exists/.test(r.stderr)) throw new Error(`could not create network ${network}: ${r.stderr.slice(0, 200)}`);
+}
+
 /**
  * Create the box. No host paths are mounted and no credentials are passed, so
  * the container has nothing of the host's to steal beyond its own X server.
@@ -82,6 +98,7 @@ function containerNameFor(userId: string): string {
 export async function createComputer(userId: string, opts: { name?: string } = {}): Promise<DesktopComputer> {
   ensureMode();
   const name = containerNameFor(userId);
+  await ensureNetwork(networkFor(name));
   const ramGb = env.desktop.ramGb;
   const args = [
     'run', '-d',
@@ -96,8 +113,15 @@ export async function createComputer(userId: string, opts: { name?: string } = {
     // X servers inside the box only; the host reaches them through the relay or
     // `docker exec`, never through a published port.
     '--security-opt', 'no-new-privileges',
+    // No capabilities at all, SYS_ADMIN included. The displays are unprivileged Xvfb
+    // and the bot is an unprivileged user, so the box never needed one: verified by
+    // running the image with `--cap-drop ALL` and taking a screenshot. Keeping
+    // SYS_ADMIN would have let a prompt-injected bot mount what it cannot read.
     '--cap-drop', 'ALL',
-    '--cap-add', 'SYS_ADMIN',
+    // One network per box, with inter-container traffic off, so a bot cannot reach the
+    // websockify of the box next door and drive it without a VNC password. The host
+    // relay still reaches the box's own bridge address; a peer cannot.
+    '--network', networkFor(name),
     '-e', `GROKBOT_SCREENS=${MAX_SCREENS}`,
     '-e', `GROKBOT_RESOLUTION=${env.desktop.resolution}`,
     env.desktop.image,
@@ -155,7 +179,10 @@ export async function suspend(id: string): Promise<{ ok: true }> {
 
 export async function removeComputer(id: string): Promise<void> {
   ensureMode();
-  await docker(['rm', '-f', assertName(id)], { timeoutMs: 60_000 });
+  const name = assertName(id);
+  await docker(['rm', '-f', name], { timeoutMs: 60_000 });
+  // The box's network exists only for the box.
+  await docker(['network', 'rm', networkFor(name)], { timeoutMs: 30_000 }).catch(() => null);
 }
 
 // ---------- screens ----------
