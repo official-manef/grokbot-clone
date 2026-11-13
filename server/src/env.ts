@@ -229,8 +229,9 @@ export function capabilityReport() {
   };
 }
 
-// SESSION_SECRET is not used to sign anything: sessions are opaque tokens in the
-// auth_sessions table. Keep the variable for compatibility, but do not gate boot on it.
+// SESSION_SECRET does sign things: the owner sign-in key and every agent's MCP
+// bearer token are HMACs of it. Boot never fails without it (the random fallback
+// above keeps that promise), but the tokens it produces then die with the process.
 if (aliased.size) console.log(`[env] legacy names in use: ${[...aliased].join(', ')}`);
 const gaps = (Object.entries(capabilities) as [Capability, boolean][]).filter(([, on]) => !on).map(([k]) => k);
 if (gaps.length) console.log(`[env] capabilities off: ${gaps.join(', ')}`);

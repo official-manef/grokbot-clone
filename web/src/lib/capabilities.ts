@@ -74,7 +74,7 @@ export function gapReason(name: Capability): string {
   switch (name) {
     case 'tts': return 'Voice preview needs a text-to-speech endpoint (TTS_BASE_URL, TTS_API_KEY, TTS_MODEL).';
     case 'stt': return 'Dictation needs a speech-to-text endpoint (STT_BASE_URL, STT_API_KEY, STT_MODEL).';
-    case 'realtime': return 'Voice calls need a realtime endpoint (REALTIME_BASE_URL, REALTIME_API_KEY, REALTIME_MODEL). Dictation still works without it.';
+    case 'realtime': return 'Voice calls need a realtime endpoint (REALTIME_BASE_URL, REALTIME_API_KEY, REALTIME_MODEL).';
     case 'image': return 'Image generation needs an image endpoint (IMAGE_BASE_URL, IMAGE_API_KEY, IMAGE_MODEL).';
     case 'desktop': return 'Bot desktops need DESKTOP_MODE=docker (or orgo) plus a running daemon.';
     case 'integrations': return 'App connections need COMPOSIO_API_KEY.';

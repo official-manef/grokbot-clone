@@ -6,6 +6,7 @@ import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
+import { CapabilityError } from './lib/capability-error.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
@@ -388,7 +389,14 @@ api.get('/computer', async (c) => c.json({ computer: await refreshComputer(c.get
 api.post('/computer/ensure', async (c) => {
   const userId = c.get('user').id;
   // Awaited: the old fire-and-forget answered with a state from before the wake.
-  const error = await ensureComputer(userId).then(() => null, (e) => String(e?.message ?? e));
+  const error = await ensureComputer(userId).then(
+    () => null,
+    (e) => {
+      // A capability gap is not a wake failure: let the one error envelope answer 501.
+      if (e instanceof CapabilityError) throw e;
+      return String(e?.message ?? e);
+    },
+  );
   if (error) console.warn('[computer] ensure failed', error);
   return c.json({ computer: computerState(userId) });
 });

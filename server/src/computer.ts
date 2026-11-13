@@ -4,6 +4,7 @@ import { hub } from './lib/hub.js';
 import { orgo, OrgoError, type OrgoScreen } from './orgo.js';
 import { cdpPortFor, dressScreen, resetScreen, undressScreen, type DeskBot } from './desk.js';
 import { box, boxGrokbot, libraryDirFor, mode as desktopMode, profileDirFor, screenIdFor, screenIndex } from './box.js';
+import { CapabilityError } from './lib/capability-error.js';
 import { getLive } from './store.js';
 import type { ComputerState } from './types.js';
 
@@ -32,6 +33,10 @@ const perUserBoxes = () => desktopMode() === 'docker' || desktopMode() === 'mso'
  * is the same for everyone.
  */
 function computerId(userId?: string): string {
+  // A deployment with no desktop at all is a capability gap (501 naming
+  // DESKTOP_MODE), not a server error: nothing is misconfigured about a bot that
+  // simply has no screen.
+  if (desktopMode() === 'disabled') throw new CapabilityError('desktop');
   if (perUserBoxes()) {
     if (!userId) throw new Error('a user id is required to resolve a per-user box');
     const row = db.prepare('SELECT orgo_id FROM computers WHERE user_id=?').get(userId) as any;
@@ -104,6 +109,7 @@ let inflight: Promise<string> | null = null;
 
 /** Make sure the computer exists and is awake. Returns its id. */
 export function ensureComputer(userId: string): Promise<string> {
+  if (desktopMode() === 'disabled') return Promise.reject(new CapabilityError('desktop'));
   if (perUserBoxes()) return ensureUserBox(userId);
   const id = computerId();
   if (Date.now() - checkedAt < 30_000) return Promise.resolve(id);
