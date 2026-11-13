@@ -9,7 +9,7 @@ import { Readable } from 'node:stream';
 import { env } from './env.js';
 import { emitBot, getBotRow, listRoutines, listTasks } from './store.js';
 import { computerState, readyScreen, resetBotScreen } from './computer.js';
-import { box, boxGrokbot, mode as desktopMode } from './box.js';
+import { box, libraryDirFor, mode as desktopMode } from './box.js';
 import { orgo } from './orgo.js';
 import { openTerminal } from './desk.js';
 import { engineHome, engineInfo, engineKind, forgetEngineOptions, restartEngine, stopOwnScreen } from './engine.js';
@@ -196,9 +196,10 @@ configApi.post('/bots/:id/handback', (c) => {
   return c.json({ ok: true });
 });
 
-// ---------- library: files under /root/grokbot/files/<botId> on the bot's computer ----------
+// ---------- library: one directory per bot on the bot's computer ----------
 
-const LIB_ROOT = `${boxGrokbot()}/files`;
+/** Per bot, because the path differs by backend (see libraryDirFor). */
+const libRoot = (botId: string) => libraryDirFor(botId);
 
 /**
  * Run a command where this bot actually works: a Docker box (per user) or the
@@ -210,8 +211,13 @@ async function boxBash(userId: string, botId: string, command: string, timeout =
     const s = await readyScreen(userId, botId);
     return box.computer.bash(s.computerId, s.screenId, command, timeout);
   }
+  // mso's box is a host directory, so the local shell already sees it; Orgo needs
+  // its API.
   return box.bash(command, timeout);
 }
+
+/** True when the Library lives on this server's own filesystem (HQ_LOCAL or mso). */
+const hostPath = () => box.local || env.desktop.mode === 'mso';
 
 function safeRel(p: string | undefined): string | null {
   const rel = (p ?? '').replace(/^\/+|\/+$/g, '');
@@ -244,8 +250,8 @@ configApi.get('/bots/:id/files', async (c) => {
   if (rel === null) return c.json({ error: 'bad path' }, 400);
   try {
     if (!box.local && computerState(user.id).status !== 'running') return c.json({ status: 'asleep', path: rel, files: [] });
-    const dir = `${LIB_ROOT}/${b.id}${rel ? `/${rel}` : ''}`;
-    const r = await boxBash(user.id, b.id, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
+    const dir = `${libRoot(b.id)}${rel ? `/${rel}` : ''}`;
+    const r = await boxBash(user.id, b.id, `mkdir -p ${shq(libRoot(b.id))} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
     if (r.exit_code !== 0) return c.json({ status: 'error', path: rel, files: [], error: (r.output ?? '').slice(0, 300) });
     return c.json({ status: 'ok', path: rel, files: parseLs(r.output ?? '') });
   } catch (e: any) {
@@ -272,10 +278,10 @@ configApi.post('/bots/:id/files/download', async (c) => {
   const { path } = await c.req.json<{ path: string }>().catch(() => ({ path: '' }));
   const rel = safeRel(path);
   if (!rel) return c.json({ error: 'bad path' }, 400);
-  // On the computer itself the file is on our own disk: serve it directly.
-  if (box.local) return c.json({ url: `/api/bots/${b.id}/files/raw?path=${encodeURIComponent(rel)}` });
+  // On the computer itself, and on mso, the file is on our own disk: serve it directly.
+  if (hostPath()) return c.json({ url: `/api/bots/${b.id}/files/raw?path=${encodeURIComponent(rel)}` });
   try {
-    const full = `${LIB_ROOT}/${b.id}/${rel}`;
+    const full = `${libRoot(b.id)}/${rel}`;
     if (desktopMode() === 'docker') {
       // No object store on a local box: read the bytes and stream them.
       const s = await readyScreen(user.id, b.id);
@@ -300,10 +306,10 @@ configApi.post('/bots/:id/files/download', async (c) => {
 
 configApi.get('/bots/:id/files/raw', (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
-  if (!b || !box.local) return c.json({ error: 'not found' }, 404);
+  if (!b || !hostPath()) return c.json({ error: 'not found' }, 404);
   const rel = safeRel(c.req.query('path'));
   if (!rel) return c.json({ error: 'bad path' }, 400);
-  const root = `${LIB_ROOT}/${b.id}`;
+  const root = libRoot(b.id);
   let file: string;
   try {
     // Follow links before checking, so a link inside the library cannot point outside it.

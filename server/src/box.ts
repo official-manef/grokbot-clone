@@ -72,17 +72,21 @@ export const mode = () => env.desktop.mode;
  * Root on a shared VM, the unprivileged bot user on a Docker box.
  *
  * mso is host-local, so its path is a real host path resolved per bot; see
- * `boxGrokbotFor`.
+ * `libraryDirFor`.
  */
 export const boxHome = (): string => (env.desktop.mode === 'docker' ? '/home/bot' : '/root');
 export const boxGrokbot = (): string => `${boxHome()}/grokbot`;
 
-/** Library directory for a specific bot on backends whose paths are host paths. */
-export function boxGrokbotFor(botId: string): string {
-  return env.desktop.mode === 'mso' ? mso.libraryDir(botId) : boxGrokbot();
+/**
+ * This bot's Library directory. The tools write here and the Library route reads
+ * here; one function so the two cannot drift apart. mso resolves a real host path per
+ * bot, the other backends share one tree keyed by bot id.
+ */
+export function libraryDirFor(botId: string): string {
+  return env.desktop.mode === 'mso' ? mso.libraryDir(botId) : `${boxGrokbot()}/files/${botId}`;
 }
 
-/** Browser profile directory for a specific bot. */
+/** This bot's browser profile directory (its logins persist there). */
 export function profileDirFor(botId: string): string {
   return env.desktop.mode === 'mso' ? mso.profileDir(botId) : `${boxGrokbot()}/profiles/${botId}`;
 }

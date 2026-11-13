@@ -154,15 +154,15 @@ Then delete the public URL in Orgo. Screens of the other bots are released when 
 You need **Node.js 22 or newer** and a Hermes gateway with its API server on (`API_SERVER_KEY` in `~/.hermes/.env`).
 
 ```bash
-git clone https://github.com/nickvasilescu/bot-hq.git
-cd bot-hq
+git clone git@github.com:official-manef/grokbot-clone.git
+cd grokbot-clone
 npm ci
 cp .env.example .env      # fill in the keys; comments in the file explain each one
 npm run dev -w server     # API on :8787
 npm run dev -w web        # app on :5173
 ```
 
-With `HQ_LOCAL=0` the server reaches the computer through the Orgo API instead of running commands on it, which is enough for development. `DEV_LOGIN=1` enables the email-only sign-in form; never set it on a public address.
+With `HQ_LOCAL=0` the server reaches the computer through the Orgo API instead of running commands on it, which is enough for development. `DEV_LOGIN=1` enables the email-only sign-in form; never set it on a public address. It defaults to `0`.
 
 `npm run build && npm start` serves the built app from the API port.
 
@@ -170,10 +170,11 @@ The keys you need:
 
 | Key | Used for |
 |---|---|
-| `ORGO_API_KEY`, `ORGO_COMPUTER_ID` | The computer and its screens |
-| `COMPOSIO_API_KEY` | Connected apps |
-| `XAI_API_KEY` | Voice and `x_search` |
-| `SESSION_SECRET` | Sign-in sessions and the tokens agents use to reach `/mcp` |
+| `ORGO_API_KEY`, `ORGO_COMPUTER_ID` | The shared computer and its screens (`DESKTOP_MODE=orgo` or `HQ_LOCAL=1` only; the default `docker` mode needs neither) |
+| `COMPOSIO_API_KEY` | Connected apps and Google sign-in |
+| `LLM_*`, `IMAGE_*`, `TTS_*`, `STT_*`, `REALTIME_*` | Model, image, speech and realtime endpoints, each optional (see below) |
+| `XAI_API_KEY` | `x_search`, and the `LLM_API_KEY` fallback when `LLM_*` is unset |
+| `SESSION_SECRET` | Owner sign-in links and the tokens agents use to reach `/mcp`. Unset, the server picks a random one per process, so both stop working at every restart |
 
 ## Models and subscriptions
 
@@ -186,14 +187,17 @@ makes every integration optional and independent.
 
 | Upstream | This fork |
 | --- | --- |
-| Orgo computer required | `DESKTOP_MODE=docker`: one local container per user, no host mounts |
-| xAI key required at boot | `LLM_*` BYOK; any OpenAI-compatible endpoint, responses or chat protocol |
-| Missing key crashes | missing key becomes `501 capability_unavailable`, naming the env vars |
-| Voice only via xAI | TTS / STT / realtime are three independent BYOK capabilities |
+| Orgo computer required | `DESKTOP_MODE=docker` (default): one local container per user, no host mounts. `mso` runs displays on the host with no container runtime, with weaker isolation |
+| xAI key required at boot | `LLM_*` BYOK; any OpenAI-compatible endpoint. `LLM_PROTOCOL=responses\|chat` decides the `api_mode` written into each managed bot's Hermes config |
+| Missing key crashes | an unset capability is reported at `GET /api/capabilities`; where a route is called anyway it answers `501 capability_unavailable`, naming the env vars |
+| Voice only via xAI | TTS / STT / realtime are three independent BYOK capabilities in `server/src/providers/speech.ts` |
+| Every tool always offered | `image_generate` appears only when `IMAGE_*` is set; the computer, browser, shell and `save_file` tools only when `DESKTOP_MODE` is not `disabled` |
 
 The Hermes engine still runs the bots. What changed is where the screen and the model come
 from: `DESKTOP_MODE` picks the screen backend (`docker`, `orgo`, `mso`, `disabled`) and the
 `LLM_*` block supplies an endpoint when you do not want to rely on an engine's own credentials.
+`x_search` still calls `api.x.ai` directly and needs an xAI key. A local replacement for
+`web_search` is planned, not built.
 
 ```bash
 docker build -t grokbot-desktop:latest server/desktop   # the box a bot works in
@@ -201,7 +205,9 @@ gb doctor                                              # then: is it all there?
 ```
 
 Inside that container a bot gets four X displays, `xdotool` for input, and a `shell` that runs
-as an unprivileged user with no host paths, no SSH keys and no Docker socket. `GET
+as an unprivileged user with no host paths, no SSH keys and no Docker socket. The container
+drops every Linux capability (`--cap-drop ALL`) and sits on its own Docker network with
+container-to-container traffic off. `GET
 /api/capabilities` reports what this deployment can actually do, and the web app hides the rest
 rather than failing a click. See [`docs/MANEF-PORT.md`](docs/MANEF-PORT.md).
 
@@ -228,6 +234,8 @@ docs/               architecture; the Orgo and xAI/Composio guides predate the H
 
 - Experimental, no security audit. With `DESKTOP_MODE=orgo` bots share one computer and can
   reach each other's files there; `DESKTOP_MODE=docker` isolates each user in their own container.
+  `DESKTOP_MODE=mso` runs bot commands as the service account on the host, which is more power
+  than a container's `bot` user.
 - Approval cards cover Composio write actions. What a bot does through its browser or shell is not gated, and Hermes' own "risky command" prompts are not shown in the app yet.
 - Four bots at most per computer, because of the four-screen limit. `DESKTOP_MODE=docker` gives
   each user their own container, so the limit is per user rather than global.
@@ -238,4 +246,4 @@ docs/               architecture; the Orgo and xAI/Composio guides predate the H
 
 Project code is available under the [MIT license](LICENSE). The bot artwork and some icons come from Grok Bot's design and remain the property of their owners, as do third-party app logos; the MIT license does not cover them. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
-Continued from [grokbot-clone](https://github.com/nickvasilescu/grokbot-clone). Built with [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Orgo](https://orgo.ai), [Composio](https://composio.dev), and [xAI](https://x.ai). This is an independent project, unaffiliated with xAI, Cursor/Anysphere or Nous Research.
+Continued from [grokbot-clone](https://github.com/nickvasilescu/grokbot-clone), rebased onto [bot-hq](https://github.com/nickvasilescu/bot-hq). Built with [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Orgo](https://orgo.ai), [Composio](https://composio.dev), and [xAI](https://x.ai). This is an independent project, unaffiliated with xAI, Cursor/Anysphere or Nous Research.

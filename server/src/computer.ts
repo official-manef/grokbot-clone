@@ -3,7 +3,7 @@ import { env } from './env.js';
 import { hub } from './lib/hub.js';
 import { orgo, OrgoError, type OrgoScreen } from './orgo.js';
 import { cdpPortFor, dressScreen, resetScreen, undressScreen, type DeskBot } from './desk.js';
-import { box, boxGrokbot, mode as desktopMode, screenIdFor, screenIndex } from './box.js';
+import { box, boxGrokbot, libraryDirFor, mode as desktopMode, profileDirFor, screenIdFor, screenIndex } from './box.js';
 import { getLive } from './store.js';
 import type { ComputerState } from './types.js';
 
@@ -338,7 +338,7 @@ export async function resetBotScreen(userId: string, botId: string): Promise<voi
   if (perUserBoxes()) {
     // A Docker display is a bare X server: start this bot's Chrome again from a
     // clean profile session. Its files and logins on disk survive.
-    const profile = `${boxGrokbot()}/profiles/${botId}`;
+    const profile = profileDirFor(botId);
     await box.computer
       .bash(s.computerId, s.screenId, `pkill -f "user-data-dir=${profile}" || true; rm -f ${profile}/Singleton*; echo ok`, 30)
       .catch(() => null);
@@ -365,10 +365,11 @@ export async function releaseScreen(botId: string): Promise<void> {
 /** A deleted bot leaves nothing behind on its computer: its browser profile and its Library folder go. */
 export async function forgetBotFiles(botId: string): Promise<void> {
   if (!/^bot_[\w-]+$/.test(botId)) return;
-  const root = boxGrokbot();
+  // The two paths are not siblings on mso, so ask for each rather than assuming a root.
+  const paths = [profileDirFor(botId), libraryDirFor(botId)];
   await box.computer
     .bash(computerId((db.prepare('SELECT user_id FROM bots WHERE id=?').get(botId) as any)?.user_id), undefined,
-      `rm -rf -- ${root}/profiles/${botId} ${root}/files/${botId}`, 60)
+      `rm -rf -- ${paths.map((p) => box.quote(p)).join(' ')}`, 60)
     .catch(() => null);
 }
 

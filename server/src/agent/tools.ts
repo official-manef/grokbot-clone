@@ -1,7 +1,7 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { box, boxGrokbot } from '../box.js';
+import { box, libraryDirFor, profileDirFor } from '../box.js';
 import { env } from '../env.js';
 import { generateImage, imageConfigured } from '../providers/image.js';
 import { screenFor } from '../computer.js';
@@ -56,7 +56,7 @@ async function shot(ctx: ToolCtx, caption: string): Promise<ToolResult> {
   await new Promise((r) => setTimeout(r, 700));
   const s = await box.computer.screenshot(computerId, screenId);
   const mime = s.mime_type ?? 'image/png';
-  const dir = `${boxGrokbot()}/files/${ctx.botId}`;
+  const dir = libraryDirFor(ctx.botId);
   const name = `screen-${Date.now()}.png`;
   const b64 = s.image.replace(/^data:[^,]+,/, '');
   const pathOnBox = `${dir}/${name}`;
@@ -200,7 +200,7 @@ export const TOOLS: ToolDef[] = [
       const url = String(a.url).replace(/'/g, '%27');
       await onScreen(ctx, (c, s) => {
         const display = s === 'default' ? ':99' : `:${s.replace('screen-', '')}`;
-        const profile = `${boxGrokbot()}/profiles/${ctx.botId}`;
+        const profile = profileDirFor(ctx.botId);
         // Reuse the bot's running Chrome if present (opens a new tab), else start one detached.
         return box.computer.bash(
           c,
@@ -222,9 +222,11 @@ export const TOOLS: ToolDef[] = [
     label: 'Saving a file',
     impl: async (a, ctx) => {
       const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
-      // One path for both modes: on a Docker box it is the unprivileged user's
-      // Library, on a shared VM it is /root/grokbot/files. boxGrokbot() decides.
-      const dir = `${boxGrokbot()}/files/${ctx.botId}`;
+      // One path for every mode, decided in one place: a Docker box uses the
+      // unprivileged user's Library, mso uses the host path for this bot, a shared
+      // VM uses /root/grokbot/files. libraryDirFor() answers, and the Library route
+      // asks it the same question, or a saved file is invisible.
+      const dir = libraryDirFor(ctx.botId);
       const file = `${dir}/${name}`;
       if (!env.localBox && env.desktop.mode === 'docker') {
         const b64 = Buffer.from(String(a.content), 'utf8').toString('base64');
@@ -263,7 +265,7 @@ export const TOOLS: ToolDef[] = [
       const images = await generateImage(String(a.prompt));
       if (!images.length) return { output: 'The image endpoint returned no image.', summary: 'No image' };
       const name = String(a.filename ?? 'image.png').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'image.png';
-      const dir = `${boxGrokbot()}/files/${ctx.botId}`;
+      const dir = libraryDirFor(ctx.botId);
       const saved: string[] = [];
       const result = await onScreen(ctx, async (c, s) => {
         await box.computer.bash(c, s, `mkdir -p ${dir}`, 30);
