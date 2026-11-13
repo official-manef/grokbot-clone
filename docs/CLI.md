@@ -46,15 +46,44 @@ or a CI job wants.
 
 ### 1. Model endpoint
 
-Four choices, because "give me an API key and a URL" is not enough — the
-protocol differs:
+Seven choices, ordered by what costs nothing. Two are genuinely free, and the
+list is taken from Hermes' own provider registry (`hermes_cli/auth.py`).
 
-| Choice | What it writes |
-| --- | --- |
-| OpenAI or any OpenAI-compatible endpoint | `LLM_PROVIDER=openai` |
-| Anthropic Claude | `LLM_PROVIDER=anthropic`, so the agent gets `ANTHROPIC_*` not `OPENAI_*` |
-| A gateway or router | same as OpenAI, for a URL in front of many models |
-| Skip | an existing Hermes agent already has a model |
+| Choice | Cost | What it writes |
+| --- | --- | --- |
+| **OpenRouter** | **free** — ten `:free` models | `LLM_PROVIDER=openai` + `OPENROUTER_API_KEY` |
+| **Nous Portal** | **free tier** via `hermes auth add nous` | `LLM_PROVIDER=nous`, `LLM_MODEL=nous/welcome`, no key |
+| OpenAI API | paid | `LLM_PROVIDER=openai` + `OPENAI_API_KEY` |
+| Anthropic Claude | paid | `LLM_PROVIDER=anthropic`, so the agent gets `ANTHROPIC_*` |
+| A gateway or router | your key | custom base URL, `LLM_PROVIDER=openai` |
+| A local model server | free | `http://127.0.0.1:1234/v1`, key usually blank |
+| Skip | — | an existing Hermes agent already has a model |
+
+The two free paths, in full:
+
+**OpenRouter.** Get a key at `openrouter.ai/keys` (no card). The wizard then
+offers the ten `:free` SKUs by number:
+
+```
+  free models on this provider:
+    1. z-ai/glm-5.2:free
+    2. minimax/minimax-m3:free
+    3. nvidia/nemotron-3-ultra-550b-a55b:free
+    …
+? Pick a number, or type a model id [1]
+```
+
+**Nous Portal.** No key at all. The wizard writes `LLM_PROVIDER=nous` and
+`LLM_MODEL=nous/welcome`, then tells you the one step it cannot do for you:
+
+```
+✓ model nous/welcome
+One step is yours: run hermes auth add nous once.
+  The free tier is pinned to nous/welcome; other models need a paid plan.
+```
+
+Hermes holds that credential, not this `.env` — which is why `gb doctor` checks
+the provider name instead of looking for a key.
 
 It asks for the base URL, then the key (hidden), then **asks the endpoint which
 models it serves** and offers them. After that it sends **one real request** and

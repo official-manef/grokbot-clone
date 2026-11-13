@@ -68,7 +68,8 @@ async function choose(question, options, defaultIndex = 0) {
   say(`${cyan('?')} ${question}`);
   options.forEach((o, i) => {
     const marker = i === defaultIndex ? cyan('›') : ' ';
-    say(`  ${marker} ${bold(String(i + 1))}. ${o.label}${o.hint ? ` ${dim(`— ${o.hint}`)}` : ''}`);
+    const badge = o.free ? ` ${green('[free]')}` : '';
+    say(`  ${marker} ${bold(String(i + 1))}. ${o.label}${badge}${o.hint ? ` ${dim(`— ${o.hint}`)}` : ''}`);
   });
   if (!process.stdin.isTTY) return defaultIndex;
   for (;;) {
@@ -234,40 +235,128 @@ function portFree(port) {
 
 // ---------- commands ----------
 
+/**
+ * The providers offered at setup, ordered by what costs the user nothing.
+ *
+ * Two facts decide this list, and both come from Hermes' own registry
+ * (hermes_cli/auth.py, _REGISTRY_ROWS and CANONICAL_PROVIDERS):
+ * - A provider either takes an API key (`env`) or is reached over OAuth. OAuth
+ *   ones are the only path that can be free without a card.
+ * - OpenRouter carries ten `:free` SKUs, so a free key there is real. Nous
+ *   Portal has a welcome trial pinned to one model, `nous/welcome`.
+ *
+ * Everything else here is a paid key. Listing them is not an endorsement; it is
+ * the shortest path for someone who already has one.
+ */
 const PROVIDERS = [
   {
+    id: 'openrouter',
+    label: 'OpenRouter — has free models',
+    hint: 'free key, ten :free models; also carries Claude/GPT/Gemini when you pay',
+    base: 'https://openrouter.ai/api/v1',
+    model: 'z-ai/glm-5.2:free',
+    free: true,
+    keyName: 'OPENROUTER_API_KEY',
+    signup: 'https://openrouter.ai/keys',
+    models: [
+      'z-ai/glm-5.2:free',
+      'minimax/minimax-m3:free',
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'thinkingmachines/inkling:free',
+      'thinkingmachines/inkling-small:free',
+      'poolside/laguna-s-2.1:free',
+      'poolside/laguna-xs-2.1:free',
+      'inclusionai/ling-3.0-flash:free',
+    ],
+  },
+  {
+    id: 'nous',
+    label: 'Nous Portal — free tier via sign-in',
+    hint: 'no key: `hermes auth add nous` once, then model nous/welcome',
+    base: '',
+    model: 'nous/welcome',
+    free: true,
+    oauth: 'nous',
+  },
+  {
     id: 'openai',
-    label: 'OpenAI (or any OpenAI-compatible endpoint)',
-    hint: 'api.openai.com, OpenRouter, a local vLLM, a router',
+    label: 'OpenAI API',
+    hint: 'paid key: api.openai.com',
     base: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
-    envBase: 'LLM_BASE_URL',
+    keyName: 'OPENAI_API_KEY',
+    signup: 'https://platform.openai.com/api-keys',
   },
   {
     id: 'anthropic',
     label: 'Anthropic Claude',
-    hint: 'api.anthropic.com, native Messages API',
-    base: 'https://api.anthropic.com/v1',
+    hint: 'paid key, native Messages API',
+    base: 'https://api.anthropic.com',
     model: 'claude-sonnet-4-5',
-    envBase: 'LLM_BASE_URL',
+    keyName: 'ANTHROPIC_API_KEY',
+    signup: 'https://console.anthropic.com/settings/keys',
   },
   {
     id: 'openai',
-    label: 'A gateway or router',
-    hint: 'one URL in front of many models (9router, LiteLLM, Vercel AI Gateway)',
+    label: 'A gateway or router (custom BYOK)',
+    hint: 'any OpenAI-compatible URL: 9router, LiteLLM, vLLM, Vercel AI Gateway',
     base: '',
     model: '',
-    envBase: 'LLM_BASE_URL',
+    custom: true,
+  },
+  {
+    id: 'openai',
+    label: 'A local model server',
+    hint: 'LM Studio or Ollama on this machine, usually no key at all',
+    base: 'http://127.0.0.1:1234/v1',
+    model: '',
+    custom: true,
   },
   {
     id: 'skip',
-    label: 'Skip for now',
-    hint: 'an existing Hermes agent already has a model',
+    label: 'Skip — an existing Hermes agent already has a model',
+    hint: '',
     base: '',
     model: '',
-    envBase: 'LLM_BASE_URL',
   },
 ];
+
+/**
+ * Ask the endpoint for its models, then send one real request.
+ *
+ * Two separate claims: the URL answers, and the key works with that model. A
+ * key that lists models but cannot complete is the case worth catching here.
+ */
+async function verifyEndpoint(base, key, model, protocol, nonInteractive, existing, opts = {}) {
+  if (!base) return;
+  if (key) {
+    process.stdout.write(`${dim('  asking the endpoint for its models…')}\n`);
+    const models = await discoverModels(base, key, protocol);
+    if (models.length) {
+      ok(`${models.length} model${models.length === 1 ? '' : 's'} available`);
+      for (const m of models.slice(0, 6)) say(`    ${dim('·')} ${m}`);
+      if (models.length > 6) note(`    … and ${models.length - 6} more`);
+      // A caller that already chose (a free-model list, an explicit id) must not
+      // be asked again: the second prompt would overwrite the first answer.
+      if (!nonInteractive && !existing.LLM_MODEL && !opts.picked) {
+        const chosen = await ask('Model id', model || models[0]);
+        if (chosen) model = chosen;
+      }
+    } else {
+      warn('the endpoint did not list its models; keeping the id you gave');
+    }
+  }
+  if (!model) return;
+  process.stdout.write(`${dim(`  sending one real request to ${model}…`)}\n`);
+  const probe = await testCompletion(base, key, model, protocol);
+  if (probe.ok) ok(`the endpoint answered: ${String(probe.detail).trim().slice(0, 60)}`);
+  else {
+    bad(`the endpoint refused: ${probe.detail}`);
+    note('  Saved anyway. `gb doctor` will check it again.');
+  }
+}
 
 async function cmdInit(argv) {
   const yes = argv.includes('-y') || argv.includes('--yes');
@@ -287,57 +376,75 @@ async function cmdInit(argv) {
 
   // ---- 1. model endpoint ----
   heading('1. Model endpoint');
+  if (!nonInteractive) {
+    note('Two of these cost nothing: an OpenRouter free key, or Nous sign-in.');
+  }
   const choice = nonInteractive ? 0 : await choose('Which model endpoint will the bots use?', PROVIDERS, 0);
   const provider = PROVIDERS[choice];
   const patch = {};
 
-  if (provider.id !== 'skip') {
+  if (provider.id === 'skip') {
+    note('Skipped. Bots will use whatever the existing Hermes agent is configured with.');
+  } else if (provider.oauth) {
+    // OAuth providers carry no key of ours; Hermes owns the credential.
+    patch.LLM_PROVIDER = provider.id;
+    patch.LLM_MODEL = provider.model;
+    ok(`model ${provider.model}`);
+    say(`${bold('One step is yours:')} run ${cyan(`hermes auth add ${provider.oauth}`)} once.`);
+    note('  That signs in and stores the credential in Hermes, not in this .env.');
+    note('  The free tier is pinned to ' + provider.model + '; other models need a paid plan.');
+  } else if (provider.custom) {
+    // Custom BYOK: the whole point is that the URL is theirs, not a list ours.
+    let base = await ask('Base URL (ends at /v1 usually)', existing.LLM_BASE_URL || provider.base);
+    if (!base) base = provider.base;
+    base = base.replace(/\/+$/, '');
+    let key = existing.LLM_API_KEY ?? '';
+    if (!nonInteractive || !key) {
+      const entered = await askSecret('API key (input hidden, blank if the server needs none)');
+      if (entered) key = entered;
+    }
+    patch.LLM_BASE_URL = base;
+    patch.LLM_PROVIDER = 'openai';
+    if (key) patch.LLM_API_KEY = key;
+    const model = nonInteractive
+      ? (existing.LLM_MODEL || provider.model)
+      : await ask('Model id', existing.LLM_MODEL || provider.model);
+    patch.LLM_MODEL = model;
+    await verifyEndpoint(base, key, model, 'openai', nonInteractive, existing);
+  } else {
     let base = provider.base;
-    if (!base) base = await ask('Base URL (ends at /v1 usually)', existing.LLM_BASE_URL ?? '');
-    else if (!nonInteractive) {
-      const custom = await ask('Base URL', existing.LLM_BASE_URL || provider.base);
-      base = custom;
+    if (!nonInteractive && provider.base) {
+      base = await ask('Base URL', existing.LLM_BASE_URL || provider.base);
     }
     base = base.replace(/\/+$/, '');
 
-    let key = existing.LLM_API_KEY ?? '';
+    if (provider.signup) {
+      note(`  Get a key at ${cyan(provider.signup)}`);
+    }
+    let key = (existing.LLM_API_KEY && existing.LLM_PROVIDER === provider.id) ? existing.LLM_API_KEY : '';
     if (!nonInteractive || !key) {
       const entered = await askSecret('API key (input hidden)');
       if (entered) key = entered;
     }
 
     patch.LLM_BASE_URL = base;
-    patch.LLM_PROVIDER = provider.id;
+    patch.LLM_PROVIDER = provider.id === 'anthropic' ? 'anthropic' : 'openai';
     if (key) patch.LLM_API_KEY = key;
+    // Hermes reads each provider's own variable name.
+    if (key && provider.keyName && provider.keyName !== 'LLM_API_KEY') patch[provider.keyName] = key;
 
-    // Model: discover, then confirm with a real call.
+    // A provider with a known free list is offered that list first: it is the
+    // reason someone picked it, and a live /models call can be rate limited.
     let model = existing.LLM_MODEL || provider.model;
-    if (key && base) {
-      process.stdout.write(`${dim('  asking the endpoint for its models…')}\n`);
-      const models = await discoverModels(base, key, provider.id);
-      if (models.length) {
-        ok(`${models.length} model${models.length === 1 ? '' : 's'} available`);
-        for (const m of models.slice(0, 8)) say(`    ${dim('·')} ${m}`);
-        if (models.length > 8) note(`    … and ${models.length - 8} more`);
-        if (!nonInteractive) model = await ask('Model id', existing.LLM_MODEL || models[0] || provider.model);
-      } else {
-        warn('the endpoint did not list its models; enter an id by hand');
-        if (!nonInteractive) model = await ask('Model id', existing.LLM_MODEL || provider.model);
-      }
+    if (provider.models?.length && !nonInteractive) {
+      say(`${dim('  free models on this provider:')}`);
+      provider.models.forEach((m, i) => say(`    ${cyan(String(i + 1))}. ${m}`));
+      const pick = await ask('Pick a number, or type a model id', '1');
+      const n = Number(pick);
+      model = Number.isInteger(n) && n >= 1 && n <= provider.models.length ? provider.models[n - 1] : pick;
     }
     patch.LLM_MODEL = model;
-
-    if (key && base && model) {
-      process.stdout.write(`${dim(`  sending one real request to ${model}…`)}\n`);
-      const probe = await testCompletion(base, key, model, provider.id);
-      if (probe.ok) ok(`the endpoint answered: ${String(probe.detail).trim().slice(0, 60)}`);
-      else {
-        bad(`the endpoint refused: ${probe.detail}`);
-        note('  Saved anyway. `gb doctor` will check it again.');
-      }
-    }
-  } else {
-    note('Skipped. Bots will use whatever the existing Hermes agent is configured with.');
+    await verifyEndpoint(base, key, model, patch.LLM_PROVIDER, nonInteractive, existing, { picked: Boolean(provider.models?.length) });
   }
 
   // ---- 2. computer ----
@@ -447,7 +554,10 @@ async function cmdDoctor(argv) {
   const base = v.LLM_BASE_URL || '';
   const key = v.LLM_API_KEY || '';
   const model = v.LLM_MODEL || '';
-  if (!base && !v.HERMES_URL) add('model', 'fail', 'no LLM_BASE_URL and no HERMES_URL');
+  if (!base && model && v.LLM_PROVIDER && v.LLM_PROVIDER !== 'openai' && v.LLM_PROVIDER !== 'anthropic') {
+    // An OAuth provider: the credential is Hermes', so check its store, not ours.
+    add('model', 'ok', `${model} via ${v.LLM_PROVIDER} (Hermes holds the credential)`);
+  } else if (!base && !v.HERMES_URL) add('model', 'fail', 'no LLM_BASE_URL and no HERMES_URL');
   else if (!base) add('model', 'warn', 'an existing Hermes agent provides the model');
   else if (!key) add('model', 'fail', 'LLM_BASE_URL is set but LLM_API_KEY is empty');
   else if (!model) add('model', 'fail', 'LLM_BASE_URL and LLM_API_KEY are set but LLM_MODEL is empty');

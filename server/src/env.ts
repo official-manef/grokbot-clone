@@ -87,7 +87,12 @@ export const env = {
    * responses, Anthropic has its own. `anthropic` also tells engine.ts to hand
    * ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL to Hermes instead of OPENAI_*.
    */
-  llmProvider: (process.env.LLM_PROVIDER?.trim() || 'openai') as 'openai' | 'anthropic',
+  llmProvider: (process.env.LLM_PROVIDER?.trim() || 'openai') as
+    | 'openai'
+    | 'anthropic'
+    /** An OAuth provider Hermes already holds a credential for (nous, codex, ...). */
+    | 'nous'
+    | (string & {}),
   /** chat = /chat/completions, responses = /responses. Endpoints differ. */
   llmProtocol: (process.env.LLM_PROTOCOL?.trim() || 'responses') as 'responses' | 'chat',
   /** Vendor-hosted tools (web_search, x_search) exist only on vendor endpoints. */
@@ -168,7 +173,12 @@ export const env = {
 
 export const capabilities: Record<Capability, boolean> = {
   // A bot answers if either a BYOK endpoint is configured or a Hermes engine runs.
-  llm: Boolean(llmKey) || Boolean(process.env.HERMES_URL || process.env.HQ_LOCAL === '1'),
+  // Three ways a bot can answer: a BYOK key, an OAuth provider Hermes holds a
+  // credential for (nous/welcome and friends, which have a model but no key),
+  // or an engine that is already running.
+  llm: Boolean(llmKey) ||
+    Boolean(llmModel && !llmBase) ||
+    Boolean(process.env.HERMES_URL || process.env.HQ_LOCAL === '1'),
   image: Boolean(image),
   tts: Boolean(tts),
   stt: Boolean(stt),

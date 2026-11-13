@@ -178,10 +178,14 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     // SHARED_ENV, so inheriting the model without the provider is how a bot ends
     // up pointing at a provider it has no key for. When this app has a BYOK
     // endpoint, that endpoint becomes the model rather than a broken inheritance.
-    if (env.llm.base && env.llm.key) {
-      cfg.model = env.llmProvider === 'anthropic'
-        ? { default: env.llm.model, provider: 'anthropic' }
-        : { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
+    if (env.llm.model && (env.llm.key || !env.llm.base)) {
+      // No base URL means an OAuth provider: name it directly so Hermes uses the
+      // credential it already holds instead of looking for a key.
+      cfg.model = !env.llm.base
+        ? { default: env.llm.model, provider: env.llmProvider }
+        : env.llmProvider === 'anthropic'
+          ? { default: env.llm.model, provider: 'anthropic' }
+          : { default: env.llm.model, provider: 'openai', api_mode: 'chat_completions' };
       delete cfg.providers;
       delete cfg.custom_providers;
       delete cfg.fallback_model;
@@ -220,6 +224,10 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
   // LLM_* block would be configuration the bots never see. Hermes reads each
   // provider's own variable names, so the generic pair is mapped onto the one
   // that matches the protocol.
+  // A provider Hermes signs in to itself (nous, openai-codex, qwen-oauth) has no
+  // key or URL of ours: its credential lives in the primary agent's auth store,
+  // and the managed home inherits it through SHARED_ENV plus the auth.json copy
+  // above. Only key-based providers are mapped onto env vars.
   if (env.llm.base && env.llm.key) {
     if (env.llmProvider === 'anthropic') {
       if (!vars.ANTHROPIC_API_KEY) vars.ANTHROPIC_API_KEY = env.llm.key;
