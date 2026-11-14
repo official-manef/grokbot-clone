@@ -114,6 +114,13 @@ export const env = {
   llmProtocol: (process.env.LLM_PROTOCOL?.trim() || 'responses') as 'responses' | 'chat',
   /** Vendor-hosted tools (web_search, x_search) exist only on vendor endpoints. */
   hostedTools: process.env.LLM_HOSTED_TOOLS === '1',
+  /**
+   * Opt in to the endpoint's hosted `x_search` tool. Kept separate from
+   * `hostedTools` because the tool is only safe to advertise when the operator
+   * says this endpoint actually implements it: a gateway that serves one hosted
+   * tool usually does not serve the other.
+   */
+  xSearch: process.env.LLM_X_SEARCH === '1',
   /** Optional search endpoint for the local web_search tool. */
   search: process.env.SEARCH_BASE_URL?.trim()
     ? { base: process.env.SEARCH_BASE_URL.trim().replace(/\/+$/, ''), key: secret('SEARCH_API_KEY') }

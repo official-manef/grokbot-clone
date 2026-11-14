@@ -79,8 +79,19 @@ function botByName(userId: string, name: string) {
   return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?)').get(userId, name.trim()) as any;
 }
 
-/** Live X research through xAI's search tool. Returns the answer text followed by the posts it cites. */
+/**
+ * True when the configured endpoint can serve the hosted `x_search` tool.
+ * Opt-in, because the tool is a vendor-hosted feature of the Responses API: a
+ * BYOK gateway that speaks chat completions has no such tool to call.
+ */
+export const xSearchConfigured = () => Boolean(env.xSearch && env.llm.base && env.llm.key);
+
+/** Live X research through the configured endpoint's hosted search tool. Returns the answer text followed by the posts it cites. */
 async function xSearch(a: any): Promise<string> {
+  if (!xSearchConfigured()) {
+    throw new Error('x_search is not available on this endpoint. Set LLM_X_SEARCH=1 only when the configured LLM endpoint implements the hosted x_search tool; otherwise use web_search or open_browser.');
+  }
+  const base = env.llm.base.replace(/\/+$/, '');
   const clean = (v: unknown) => (Array.isArray(v) ? v.map((h) => String(h).replace(/^@/, '').trim()).filter(Boolean).slice(0, 10) : []);
   const tool: Record<string, unknown> = { type: 'x_search' };
   const only = clean(a.handles);
@@ -90,12 +101,12 @@ async function xSearch(a: any): Promise<string> {
   const day = /^\d{4}-\d{2}-\d{2}$/;
   if (day.test(String(a.from_date ?? ''))) tool.from_date = a.from_date;
   if (day.test(String(a.to_date ?? ''))) tool.to_date = a.to_date;
-  const res = await fetch('https://api.x.ai/v1/responses', {
+  const res = await fetch(`${base}/responses`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.xaiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${env.llm.key}`, 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(240_000),
     body: JSON.stringify({
-      model: env.xaiModel,
+      model: env.llm.model,
       store: false,
       tools: [tool],
       input: [
@@ -530,6 +541,8 @@ export function availableTools(): ToolDef[] {
   const desktopOn = env.desktop.mode !== 'disabled';
   return TOOLS.filter((t) => {
     if (t.name === 'image_generate') return imageConfigured();
+    // Vendor-hosted tool: only advertised when the operator opted in for this endpoint.
+    if (t.name === 'x_search') return xSearchConfigured();
     if (t.name.startsWith('computer_') || t.name === 'open_browser' || t.name === 'save_file' || t.name === 'shell') return desktopOn;
     return true;
   });
