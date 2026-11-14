@@ -15,7 +15,8 @@
     "start": "npm run start -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "setup": "node bin/gb init",
-    "doctor": "node bin/gb doctor"
+    "doctor": "node bin/gb doctor",
+    "test": "node --test server/test/*.test.mjs"
   },
   "engines": {
     "node": ">=22"

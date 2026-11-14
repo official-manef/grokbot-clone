@@ -349,7 +349,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'shell',
-    description: 'Run a bash command on your own Linux computer (as root). Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
+    description: 'Run a bash command on your own Linux computer, inside its sandbox. Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
     parameters: obj({ command: { type: 'string' }, timeout_seconds: { type: 'integer' } }, ['command']),
     activity: 'running_commands',
     label: 'Running commands',
