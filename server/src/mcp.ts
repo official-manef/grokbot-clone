@@ -62,6 +62,13 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   try {
     const own = toolMap.get(name);
     if (own) {
+      // Hiding a tool from the list is not enough: an engine with a stale schema, or a
+      // model that names it anyway, would still reach the implementation. `availableTools`
+      // is the same gate the list uses, so the two can never disagree.
+      if (!availableTools().some((t) => t.name === name)) {
+        noteToolOutcome(botId, rowSeq, { status: 'denied', summary: 'Not configured' });
+        return text(`The ${name} tool is not available in this deployment: the capability it needs is not configured. Do not retry it.`, true);
+      }
       const r = await own.impl(args, ctx);
       if (r.endTurn) markSilent(botId);
       noteToolOutcome(botId, rowSeq, { status: 'done', summary: r.summary });

@@ -13,7 +13,7 @@ import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComp
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
 import { orgo } from './orgo.js';
-import { box } from './box.js';
+import { box, libraryDirFor } from './box.js';
 import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin, toolkitInfo } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
@@ -417,6 +417,20 @@ api.get('/bots/:id/screenshot', async (c) => {
     // own container, and env.orgoComputerId is empty.
     const comp = db.prepare('SELECT orgo_id FROM computers WHERE user_id=?').get(user.id) as any;
     if (!comp?.orgo_id) return c.body(null, 204);
+
+    // `?seq=<name>` is the file `computer_screenshot` saved when the model took the
+    // picture. Serving it back is the point: a live capture shows the screen now, not
+    // what the bot was answering about. Anything that is not one of those names is not
+    // a file this route will read, so the path stays inside the bot's own library.
+    const seq = c.req.query('seq') ?? '';
+    const saved = /^screen-\d+\.png$/.test(seq) ? seq : null;
+    if (saved && (env.desktop.mode === 'docker' || env.desktop.mode === 'mso')) {
+      try {
+        const bytes = await box.computer.readFile(comp.orgo_id, `${libraryDirFor(b.id)}/${saved}`);
+        return c.body(new Uint8Array(bytes), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+      } catch { /* not saved yet (the write is best-effort): fall through to a live capture */ }
+    }
+
     const s = await box.computer.screenshot(comp.orgo_id, scr.screen_id);
     const b64 = s.image.replace(/^data:[^,]+,/, '');
     return c.body(Buffer.from(b64, 'base64'), 200, { 'Content-Type': s.mime_type ?? 'image/jpeg', 'Cache-Control': 'no-store' });
