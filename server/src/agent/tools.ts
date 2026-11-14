@@ -168,9 +168,29 @@ async function webSearch(a: any): Promise<string> {
   return results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}${r.snippet ? `\n${r.snippet}` : ''}`).join('\n\n').slice(0, 20000);
 }
 
-/** Accepts `results[]`, Brave's `web.results[]`, or a bare array; each item title/url/description|snippet. */
+/**
+ * The result array from the shapes search endpoints actually return:
+ *
+ *   { results: [...] }            generic gateways, Tavily-ish
+ *   { web: { results: [...] } }   Brave Search
+ *   { organic_results: [...] }    Serper-shaped SERP clones
+ *   { organic: [...] }            Serper itself
+ *   { items: [...] }              Google CSE
+ *   { data: [...] }               some proxies
+ *   [...]                         a bare array
+ *
+ * Anything else is empty, which reads as "no results", not as an error: a
+ * provider that answered 200 with a shape we do not know has no results to cite.
+ */
+const RESULT_LISTS = ['results', 'organic_results', 'organic', 'items'] as const;
+
 export function parseResults(json: any): { title: string; url: string; snippet: string }[] {
-  const arr: any[] = Array.isArray(json) ? json : json?.results ?? json?.web?.results ?? json?.data ?? [];
+  let arr: any = [];
+  if (Array.isArray(json)) arr = json;
+  else if (Array.isArray(json?.web?.results)) arr = json.web.results;
+  else if (Array.isArray(json?.data)) arr = json.data;
+  else for (const key of RESULT_LISTS) if (Array.isArray(json?.[key])) { arr = json[key]; break; }
+
   const out: { title: string; url: string; snippet: string }[] = [];
   for (const item of Array.isArray(arr) ? arr : []) {
     const url = typeof item === 'string' ? item : item?.url ?? item?.link;
@@ -178,6 +198,7 @@ export function parseResults(json: any): { title: string; url: string; snippet: 
     out.push({
       title: String(item?.title ?? item?.name ?? url).slice(0, 300),
       url,
+      // Serper: snippet; Google CSE: snippet; Tavily: content; Brave: description.
       snippet: String(item?.snippet ?? item?.description ?? item?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 600),
     });
   }

@@ -128,3 +128,50 @@ test('web_search: a non-2xx answers an error, not an uncaught throw', async () =
     assert.match(r.error, /quota exceeded/);
   } finally { server.close(); }
 });
+
+test('web_search: reads a real Serper body (organic_results), not an empty list', async () => {
+  const serper = {
+    searchParameters: { q: 'ai agents', type: 'search', engine: 'google' },
+    organic: [
+      { title: 'Agents explained', link: 'https://example.com/agents', snippet: 'A short intro.', position: 1 },
+      { title: 'Agent frameworks', link: 'https://example.com/frameworks', snippet: 'Frameworks compared.', position: 2 },
+    ],
+    // The real field the tool must read; `organic` above is Serper's alternate.
+    organic_results: [
+      { title: 'Agents explained', link: 'https://example.com/agents', snippet: 'A short intro.\nSecond line.' },
+      { title: 'Agent frameworks', link: 'https://example.com/frameworks', snippet: 'Frameworks compared.' },
+      { title: 'No link', snippet: 'dropped' },
+    ],
+  };
+  const { server, base } = await serve((_req, res) => json(res, serper));
+  try {
+    const r = await run('call', { name: 'web_search', args: { query: 'ai agents' } }, {
+      SEARCH_BASE_URL: base, SEARCH_API_KEY: 'k',
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.notEqual(r.value.output, 'No results came back.');
+    assert.match(r.value.output, /1\. Agents explained/);
+    assert.match(r.value.output, /https:\/\/example\.com\/agents/);
+    assert.match(r.value.output, /A short intro\. Second line\./);
+    assert.match(r.value.output, /2\. Agent frameworks/);
+    assert.doesNotMatch(r.value.output, /No link/);
+  } finally { server.close(); }
+});
+
+test('web_search: reads a Google CSE body (items)', async () => {
+  const cse = {
+    kind: 'customsearch#search',
+    items: [
+      { title: 'Result one', link: 'https://example.org/one', snippet: 'From CSE.' },
+    ],
+  };
+  const { server, base } = await serve((_req, res) => json(res, cse));
+  try {
+    const r = await run('call', { name: 'web_search', args: { query: 'x' } }, {
+      SEARCH_BASE_URL: base, SEARCH_API_KEY: 'k',
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.match(r.value.output, /1\. Result one/);
+    assert.match(r.value.output, /https:\/\/example\.org\/one/);
+  } finally { server.close(); }
+});
