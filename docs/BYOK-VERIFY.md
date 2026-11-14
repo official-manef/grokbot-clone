@@ -242,6 +242,82 @@ tools. `x_search` appears only with `LLM_X_SEARCH=1`; `web_search` only with
   list per turn, so nothing was cached by leaving it unconditional.)*
 
 
+## Review round
+
+An adversarial review of `0f63f4b`, `2e278b3`, `2541db7` found six defects and
+three hardenings. One commit per fix, on `feat/byok-latest`. Re-run at `3792ec7`
+(`npm run typecheck`: clean; both search suites green).
+
+| Commit | Fix | Proof |
+| --- | --- | --- |
+| `3c85e18` | docs: stop publishing a usable session secret | §2 now shows `SESSION_SECRET=$(openssl rand -hex 32)`; the old literal appears nowhere in the working tree (searched the tree for its first 17 characters, excluding `.git` and `node_modules`: no matches), and the working `.env` was regenerated |
+| `ba86c0a` | fix(byok): one definition of a configured model endpoint | `llmConfigured()` lives in `env.ts`; `providers/llm.ts` re-exports it and `agent/tools.ts` derives `xSearchConfigured`/`webSearchConfigured` from `xSearchAvailable`/`searchConfigured`. 9 cases in `server/test/llm-capability.test.mjs` |
+| `67d6f02` | fix(byok): stop reporting a healthy engine that is not there | `/api/health` returns `engine` from `capabilityReport().engine` (`hermes`/`byok`/`unconfigured`) and HTTP 503 when `ok` is false; `?probe=1` is the opt-in reachability check, Hermes only. Same test file, engine-name case |
+| `cf2fb78` | fix(byok): report search tools in the capability contract | `/api/capabilities` carries `tools: { web_search, x_search }`; `gaps` stays the `Capability` union. Same test file, contract case |
+| `1660c62` | fix(byok): only advertise tools that exist | `agent/prompt.ts` builds the search lines from `xSearchConfigured()`/`webSearchConfigured()`. Same test file, prompt case (a bare BYOK prompt names neither; a full one names both) |
+| `2dea3c9` | fix(byok): accept the result shapes real search endpoints return | `parseResults` reads `results`, `organic_results`, `organic`, `items`, `web.results`, `data` and a bare array. Two new cases in `web-search.test.mjs` with Serper-shaped and CSE-shaped bodies |
+| `3792ec7` | fix(byok): harden the search tools | `webSearch` refuses bodies over 2 MB (before parsing, `content-length` and streamed bytes both checked); `xSearch` sends `allowed_x_handles` **and** `excluded_x_handles`; both throw `CapabilityError` so the model reads a gap with `configure[]`. Three new cases across the two suites |
+
+### Totals
+
+```
+$ npm run typecheck
+> tsc -p tsconfig.json --noEmit    (both workspaces, exit 0)
+
+$ node server/test/x-search.test.mjs
+ℹ tests 5    ℹ pass 5    ℹ fail 0
+
+$ node server/test/web-search.test.mjs
+ℹ tests 9    ℹ pass 9    ℹ fail 0
+```
+
+Full server suite for this round: `providers`, `desktop`, `x-search`,
+`web-search`, `llm-capability` → **37 tests, 37 pass, 0 fail**.
+
+### Honest decisions recorded here
+
+- **Model-only is not "configured".** `LLM_MODEL` alone used to report
+  `capabilities.llm: true` and then fail every turn. It is now false. An
+  OAuth-style provider (model, no key, no base) is counted only through the
+  Hermes branch, because that credential lives in Hermes' own auth store and this
+  process cannot see it from its env.
+- **`x_search` requires the `responses` protocol.** The tool is a hosted
+  `/responses` feature; the verified BYOK env sets `LLM_PROTOCOL=chat`, where the
+  endpoint does not exist. It also requires `LLM_MODEL`, which it posts.
+- **`/api/health` makes no network call by default.** Probing a BYOK endpoint
+  would be a billable model request on every uptime poll, so the default answer
+  is configuration truth, and `?probe=1` (Hermes only) is the opt-in.
+- **`gaps` did not grow.** Extending the `Capability` union would have dragged
+  two non-UI entries into every web-client gate; a sibling `tools` object is the
+  smaller honest change, and the old claim in §Findings is corrected above.
+- **The prompt was not cached.** The comment in `agent/prompt.ts` warns about the
+  cached part of the prompt; `functionSchemas()` already rebuilt per turn, so
+  filtering the two search lines costs nothing.
+
+### `availableTools()` after the round (BYOK-only + `SEARCH_BASE_URL`)
+
+Probed with `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` set, `LLM_PROTOCOL=chat`, no
+`LLM_X_SEARCH`, no `HERMES_URL`/`HQ_LOCAL`, `DESKTOP_MODE=disabled`, and
+`SEARCH_BASE_URL` set:
+
+```
+remember, web_search, create_routine, list_event_triggers, create_event_routine,
+stay_silent, set_checkins, list_routines, update_routine, delete_routine,
+create_task, update_task, send_to_bot, create_group, post_to_group, ask_user,
+request_app_connection
+```
+
+`web_search` is present because the endpoint is; `x_search` is absent because the
+protocol is `chat`, which has no `/responses` — the two facts now come from the
+same predicates in `env.ts`.
+
+### Still not exercised
+
+- No live call to a real Serper/CSE endpoint, or a real hosted `x_search`: both
+  are proven against stubs that return those vendors' shapes.
+- No live reachability probe of a Hermes engine: `?probe=1` is implemented and
+  reviewed but no Hermes gateway runs in this environment.
+
 ## Blocked / not executed
 
 - **LLM inference not exercised.** Only configuration was verified; no chat

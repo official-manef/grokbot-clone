@@ -61,10 +61,13 @@ from `LLM_PROTOCOL`, and the engine's own OpenAI-style (or Anthropic) credential
 
 No vendor host is hardcoded any more. `x_search` (`agent/tools.ts`) posts to
 `{LLM_BASE_URL}/responses` with `LLM_API_KEY`/`LLM_MODEL`, and
-`availableTools()` lists it only when `LLM_X_SEARCH=1`. The flag is opt-in
-because the hosted `x_search` tool is a feature of the vendor's Responses API,
-not of every OpenAI-compatible gateway; called while unset, the tool answers a
-capability error naming `LLM_X_SEARCH` instead of fetching anything.
+`availableTools()` lists it only when the endpoint can actually serve it:
+`LLM_X_SEARCH=1`, a complete base+key pair, `LLM_MODEL`, and
+`LLM_PROTOCOL=responses`. The flag is opt-in because the hosted `x_search` tool is
+a feature of the vendor's Responses API, not of every OpenAI-compatible gateway;
+the protocol check exists because a `chat` gateway has no `/responses` at all.
+Called when it is not offered, the tool answers a capability error
+(`capability_unavailable`, `configure: [...]`) instead of fetching anything.
 
 `LLM_HOSTED_TOOLS` is read in `env.ts`. It is echoed by `/api/capabilities` and
 consulted by `providers/llm.ts` (`responsesBody`), but nothing calls that function.
@@ -72,7 +75,11 @@ consulted by `providers/llm.ts` (`responsesBody`), but nothing calls that functi
 `{ query, max_results }` and a `Bearer SEARCH_API_KEY`, returning a compact cited
 list (title, url, snippet). It is listed by `availableTools()` only when
 `SEARCH_BASE_URL` is set, and answers a capability error naming
-`SEARCH_BASE_URL`/`SEARCH_API_KEY` when called unset.
+`SEARCH_BASE_URL`/`SEARCH_API_KEY` when called unset. Its parser reads the shapes
+real endpoints return (`results`, `organic_results`/`organic`, `items`,
+`web.results`, `data`, a bare array), and refuses a response body over 2 MB
+before parsing it. Both search tools are reported in `/api/capabilities` under
+`tools` (`web_search`, `x_search`), beside the `capabilities` map.
 
 ## 3. Docker blur (replacement for Orgo)
 
