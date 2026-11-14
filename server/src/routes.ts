@@ -4,6 +4,7 @@ import { db, now } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
+import { isEmailAllowed } from './lib/email-allowlist.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
@@ -38,7 +39,12 @@ function createBot(userId: string, b: { name: string; label?: string; descriptio
   return getBot(id)!;
 }
 
+/** Thrown for things the user can fix; the message is shown to them. */
+class UserError extends Error {}
+
 function findOrCreateUser(email: string, name?: string, preferId?: string) {
+  // Refusal is identical for an email and a domain rejection: it says nothing about which list refused.
+  if (!isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains })) throw new UserError('This account is not allowed to sign in here.');
   const existing = db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any;
   if (existing) return { id: existing.id as string, isNew: false };
   const id = preferId ?? newId('usr');
@@ -86,9 +92,13 @@ api.post('/auth/dev', async (c) => {
   if (!env.devLogin) return c.json({ error: 'disabled' }, 403);
   const { email, name } = await c.req.json<{ email: string; name?: string }>();
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
-  const { id } = findOrCreateUser(email, name);
-  createSession(c, id);
-  return c.json({ ok: true });
+  try {
+    const { id } = findOrCreateUser(email, name);
+    createSession(c, id);
+    return c.json({ ok: true });
+  } catch (e: any) {
+    return c.json({ error: e instanceof UserError ? e.message : 'could not sign in' }, 403);
+  }
 });
 
 api.post('/auth/logout', (c) => { destroySession(c); return c.json({ ok: true }); });
