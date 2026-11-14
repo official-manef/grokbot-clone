@@ -56,5 +56,5 @@ try {
       throw new Error(`unknown probe: ${kind}`);
   }
 } catch (e) {
-  out({ ok: false, error: String(e?.message ?? e), capability: e?.capability });
+  out({ ok: false, error: String(e?.message ?? e), capability: e?.capability, configure: e?.missing });
 }

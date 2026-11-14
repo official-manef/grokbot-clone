@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Capability } from './lib/capability-error.js';
+import type { Capability, ToolCapability } from './lib/capability-error.js';
 
 // Every optional integration resolves here, once, at boot. Nothing below throws
 // for a missing key: a capability is either configured or it is reported as a
@@ -250,8 +250,6 @@ export const capabilities: Record<Capability, boolean> = {
  * do while the two newest tools were invisible to any client. One object, built
  * from the same predicates `availableTools()` uses.
  */
-export type ToolCapability = 'web_search' | 'x_search';
-
 export const toolCapabilities: Record<ToolCapability, boolean> = {
   web_search: searchConfigured(),
   x_search: xSearchAvailable(),

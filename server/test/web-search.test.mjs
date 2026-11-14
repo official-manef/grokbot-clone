@@ -129,6 +129,30 @@ test('web_search: a non-2xx answers an error, not an uncaught throw', async () =
   } finally { server.close(); }
 });
 
+test('web_search: unset endpoint is a capability gap, not prose', async () => {
+  const r = await run('call', { name: 'web_search', args: { query: 'x' } }, { SEARCH_BASE_URL: '' });
+  assert.equal(r.ok, false);
+  assert.equal(r.capability, 'web_search');
+  assert.match(r.error, /Web search \(SEARCH_BASE_URL\) is not configured/);
+  assert.deepEqual(r.configure, ['SEARCH_BASE_URL']);
+});
+
+test('web_search: an oversized body is refused instead of parsed', async () => {
+  // 3 MB of JSON, over the 2 MB cap.
+  const big = JSON.stringify({ results: [{ title: 'x'.repeat(3 * 1024 * 1024), url: 'https://example.com/a' }] });
+  const { server, base } = await serve((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(big);
+  });
+  try {
+    const r = await run('call', { name: 'web_search', args: { query: 'x' } }, {
+      SEARCH_BASE_URL: base, SEARCH_API_KEY: 'k',
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /2097152-byte limit/);
+  } finally { server.close(); }
+});
+
 test('web_search: reads a real Serper body (organic_results), not an empty list', async () => {
   const serper = {
     searchParameters: { q: 'ai agents', type: 'search', engine: 'google' },

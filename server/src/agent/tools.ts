@@ -90,15 +90,18 @@ export const xSearchConfigured = xSearchAvailable;
 /** Live X research through the configured endpoint's hosted search tool. Returns the answer text followed by the posts it cites. */
 async function xSearch(a: any): Promise<string> {
   if (!xSearchConfigured()) {
-    throw new Error('x_search is not available on this endpoint. Set LLM_X_SEARCH=1 only when the configured LLM endpoint implements the hosted x_search tool; otherwise use web_search or open_browser.');
+    // A gap, not prose: the model reads the shape and stops instead of retrying.
+    throw new CapabilityError('x_search');
   }
   const base = env.llm.base.replace(/\/+$/, '');
   const clean = (v: unknown) => (Array.isArray(v) ? v.map((h) => String(h).replace(/^@/, '').trim()).filter(Boolean).slice(0, 10) : []);
   const tool: Record<string, unknown> = { type: 'x_search' };
   const only = clean(a.handles);
   const not = clean(a.exclude_handles);
+  // Both fields are accepted together; `else if` silently dropped the exclusion
+  // list whenever handles were also given.
   if (only.length) tool.allowed_x_handles = only;
-  else if (not.length) tool.excluded_x_handles = not;
+  if (not.length) tool.excluded_x_handles = not;
   const day = /^\d{4}-\d{2}-\d{2}$/;
   if (day.test(String(a.from_date ?? ''))) tool.from_date = a.from_date;
   if (day.test(String(a.to_date ?? ''))) tool.to_date = a.to_date;
@@ -135,14 +138,33 @@ async function xSearch(a: any): Promise<string> {
 
 /**
  * A local web search. Any endpoint that takes `{ query }` with a bearer key and
- * returns a result list; the three shapes in the wild are read by `parseResults`.
+ * returns a result list; the shapes in the wild are read by `parseResults`.
  */
 export const webSearchConfigured = searchConfigured;
 
-async function webSearch(a: any): Promise<string> {
-  if (!env.search) {
-    throw new Error('web_search is not available. Set SEARCH_BASE_URL (and SEARCH_API_KEY) to a search endpoint that returns { title, url, snippet } results.');
+/** Bodies above this are not a search response. Refuse before parsing, so a
+ *  broken endpoint cannot stream the server out of memory. */
+const MAX_SEARCH_BODY = 2 * 1024 * 1024;
+
+async function readCapped(res: Response, limit = MAX_SEARCH_BODY): Promise<string> {
+  const declared = Number(res.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new Error(`search endpoint returned ${declared} bytes, over the ${limit}-byte limit`);
   }
+  if (!res.body) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength;
+    // No trust in content-length: a chunked response declares nothing.
+    if (total > limit) throw new Error(`search endpoint body exceeded the ${limit}-byte limit; refusing to parse it`);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function webSearch(a: any): Promise<string> {
+  if (!env.search) throw new CapabilityError('web_search');
   const n = Math.min(Math.max(Number(a.max_results ?? 8) || 8, 1), 20);
   const res = await fetch(`${env.search.base}/search`, {
     method: 'POST',
@@ -153,7 +175,7 @@ async function webSearch(a: any): Promise<string> {
     body: JSON.stringify({ query: String(a.query ?? ''), max_results: n }),
     signal: AbortSignal.timeout(30_000),
   });
-  const text = await res.text();
+  const text = await readCapped(res);
   let json: any;
   try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
   if (!res.ok) {

@@ -11,7 +11,17 @@ export type Capability =
   | 'integrations'
   | 'signin';
 
-const LABELS: Record<Capability, string> = {
+/**
+ * Model-facing tools that are configuration. They are deliberately NOT in
+ * `Capability`: nothing in the UI gates on them, so a missing search endpoint is
+ * not "the app is partly configured". A tool that is still reached anyway (a
+ * stale MCP tool list, a direct call) answers the same gap shape.
+ */
+export type ToolCapability = 'web_search' | 'x_search';
+
+export type CapabilityKey = Capability | ToolCapability;
+
+const LABELS: Record<CapabilityKey, string> = {
   llm: 'Language model',
   image: 'Image generation',
   tts: 'Text to speech',
@@ -20,10 +30,12 @@ const LABELS: Record<Capability, string> = {
   desktop: 'Bot desktop',
   integrations: 'App connections',
   signin: 'Google sign-in',
+  web_search: 'Web search (SEARCH_BASE_URL)',
+  x_search: 'X search (LLM_X_SEARCH=1)',
 };
 
 /** The env vars an operator has to set to close this gap, so the error names them. */
-const REQUIRED: Record<Capability, string[]> = {
+const REQUIRED: Record<CapabilityKey, string[]> = {
   llm: ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL'],
   image: ['IMAGE_BASE_URL', 'IMAGE_API_KEY', 'IMAGE_MODEL'],
   tts: ['TTS_BASE_URL', 'TTS_API_KEY', 'TTS_MODEL'],
@@ -32,12 +44,14 @@ const REQUIRED: Record<Capability, string[]> = {
   desktop: ['DESKTOP_MODE'],
   integrations: ['COMPOSIO_API_KEY'],
   signin: ['COMPOSIO_API_KEY'],
+  web_search: ['SEARCH_BASE_URL'],
+  x_search: ['LLM_X_SEARCH=1', 'LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL', 'LLM_PROTOCOL=responses'],
 };
 
 export class CapabilityError extends Error {
   readonly code = 'capability_unavailable';
   constructor(
-    readonly capability: Capability,
+    readonly capability: CapabilityKey,
     readonly missing: string[] = REQUIRED[capability],
   ) {
     super(`${LABELS[capability]} is not configured.`);

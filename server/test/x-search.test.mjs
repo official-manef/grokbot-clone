@@ -110,8 +110,27 @@ test('x_search: called with the opt-in unset answers a capability error, no fetc
       LLM_BASE_URL: `${base}/v1`, LLM_API_KEY: 'k', LLM_MODEL: 'm', LLM_X_SEARCH: '',
     });
     assert.equal(r.ok, false);
-    assert.match(r.error, /x_search is not available/);
-    assert.match(r.error, /LLM_X_SEARCH=1/);
+    // The capability error, not prose: the model reads a gap and can act on it.
+    assert.equal(r.capability, 'x_search');
+    assert.match(r.error, /X search .* is not configured/);
+    assert.ok(r.configure.includes('LLM_X_SEARCH=1'), `expected the fix named, got ${JSON.stringify(r.configure)}`);
     assert.deepEqual(seen, [], 'must not call the endpoint at all');
+  } finally { server.close(); }
+});
+
+test('x_search: handles and exclude_handles are both sent', async () => {
+  const seen = [];
+  const { server, base } = await serve((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => { seen.push(JSON.parse(body)); json(res, { output: [] }); });
+  });
+  try {
+    const r = await run('call', { name: 'x_search', args: { query: 'agents', handles: ['@a'], exclude_handles: ['b'] } }, {
+      LLM_BASE_URL: `${base}/v1`, LLM_API_KEY: 'k', LLM_MODEL: 'm', LLM_X_SEARCH: '1',
+    });
+    assert.equal(r.ok, true, r.error);
+    assert.deepEqual(seen[0].tools[0].allowed_x_handles, ['a']);
+    assert.deepEqual(seen[0].tools[0].excluded_x_handles, ['b'], 'the exclusion list must not be dropped');
   } finally { server.close(); }
 });
