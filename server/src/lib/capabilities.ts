@@ -18,6 +18,8 @@ export async function capabilitiesPayload() {
     ...base,
     desktop,
     // Named so the UI can say *why* a control is missing without guessing.
+    // Search tools are reported in `tools`, not here: `gaps` is the Capability
+    // union only, and nothing in the app shell gates on them.
     gaps: Object.entries(base.capabilities)
       .filter(([, on]) => !on)
       .map(([name]) => name),

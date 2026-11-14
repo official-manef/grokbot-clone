@@ -244,6 +244,20 @@ export const capabilities: Record<Capability, boolean> = {
 };
 
 /**
+ * The model-facing tools that are configuration, not code. They are not entries
+ * in `Capability` (nothing in the UI gates on them), but leaving them out of the
+ * report meant `/api/capabilities` claimed to describe what this deployment can
+ * do while the two newest tools were invisible to any client. One object, built
+ * from the same predicates `availableTools()` uses.
+ */
+export type ToolCapability = 'web_search' | 'x_search';
+
+export const toolCapabilities: Record<ToolCapability, boolean> = {
+  web_search: searchConfigured(),
+  x_search: xSearchAvailable(),
+};
+
+/**
  * Which backend would answer a turn, named honestly. `hermes` only when a
  * Hermes URL (or HQ_LOCAL) is really set: a BYOK pair is a different engine and
  * saying "hermes" for it is how a health check lied.
@@ -260,6 +274,8 @@ export function capabilityReport() {
     hostedTools: env.hostedTools,
     desktop: env.desktop.mode,
     capabilities,
+    /** The search tools, reported beside the capability map so a client gates on them too. */
+    tools: toolCapabilities,
     /** Which backend answers a turn: 'hermes', 'byok', or nothing. */
     engine: engineName(),
     /** Non-fatal boot notes: legacy env names, skipped integrations. */

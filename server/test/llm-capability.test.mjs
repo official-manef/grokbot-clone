@@ -100,3 +100,18 @@ test('x_search: base + key on the responses protocol offers it', async () => {
   assert.equal(r.ok, true, r.error);
   assert.ok(r.names.includes('x_search'), `expected x_search in ${r.names.join(',')}`);
 });
+
+test('capabilities: the search tools are inside the contract, not outside it', async () => {
+  const off = await run('caps', {}, { LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm' });
+  assert.equal(off.ok, true, off.error);
+  assert.deepEqual(off.report.tools, { web_search: false, x_search: false },
+    'a client must be able to read that neither search tool exists');
+
+  const on = await run('caps', {}, {
+    LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm',
+    LLM_PROTOCOL: 'responses', LLM_X_SEARCH: '1', SEARCH_BASE_URL: 'http://127.0.0.1:9',
+  });
+  assert.equal(on.ok, true, on.error);
+  assert.deepEqual(on.report.tools, { web_search: true, x_search: true });
+  assert.ok(!('web_search' in on.report.capabilities), 'the Capability union stays the UI contract');
+});

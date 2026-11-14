@@ -27,6 +27,8 @@ export interface CapabilityReport {
   /** Which backend answers a turn. `byok` is a direct endpoint, `hermes` an engine that owns its own credentials. */
   engine: 'hermes' | 'byok' | 'unconfigured';
   capabilities: Record<Capability, boolean>;
+  /** The model-facing search tools. Not in `capabilities`: nothing in the UI gates on them. */
+  tools: Record<'web_search' | 'x_search', boolean>;
   gaps: Capability[];
   notes: string[];
 }

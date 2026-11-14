@@ -164,7 +164,10 @@ $ curl -s -w ' HTTP %{http_code}\n' http://127.0.0.1:8787/api/health
   matching the HTTP payload.
 - **Gaps are surfaced, not hidden.** `/api/capabilities` returns an explicit
   `gaps` array listing every unavailable capability, which is the opposite of
-  silent faking.
+  silent faking. *(Superseded: when `web_search` and `x_search` were added they
+  were not in that union, so the claim was false for exactly those two. They are
+  now reported in a `tools` object beside `capabilities`, and `gaps` remains the
+  `Capability` union — see the Review round section.)*
 - **`hostedTools` is false** — no vendor-hosted tool surface is claimed.
 
 ## Verified
