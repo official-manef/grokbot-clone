@@ -234,11 +234,12 @@ tools. `x_search` appears only with `LLM_X_SEARCH=1`; `web_search` only with
 - No live `x_search` or `web_search` call against a real endpoint: there is no
   endpoint in this environment that implements either. What is proven is the URL,
   the header, the response parsing and the refusal path, all against stubs.
-- `server/src/agent/prompt.ts` still names `x_search` in the system prompt
+- `server/src/agent/prompt.ts` names `x_search` in the system prompt
   unconditionally, so a BYOK bot is told about a tool its MCP list does not
-  offer. Harmless (the tool list is authoritative and a call would answer the
-  capability error) but not yet filtered by `availableTools()`; fixing it means
-  touching the prompt cache, which this task did not.
+  offer. *(Fixed in the review round: the line is now filtered on
+  `xSearchConfigured()`, and a `web_search` line appears only when
+  `webSearchConfigured()` is true. `functionSchemas()` already rebuilt the tool
+  list per turn, so nothing was cached by leaving it unconditional.)*
 
 
 ## Blocked / not executed

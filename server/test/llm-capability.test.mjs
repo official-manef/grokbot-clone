@@ -115,3 +115,18 @@ test('capabilities: the search tools are inside the contract, not outside it', a
   assert.deepEqual(on.report.tools, { web_search: true, x_search: true });
   assert.ok(!('web_search' in on.report.capabilities), 'the Capability union stays the UI contract');
 });
+
+test('prompt: only tools that exist are advertised', async () => {
+  const bare = await run('prompt', {}, { LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm' });
+  assert.equal(bare.ok, true, bare.error);
+  assert.doesNotMatch(bare.text, /x_search/, 'x_search is not on this endpoint and must not be named');
+  assert.doesNotMatch(bare.text, /web_search/);
+
+  const on = await run('prompt', {}, {
+    LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm',
+    LLM_PROTOCOL: 'responses', LLM_X_SEARCH: '1', SEARCH_BASE_URL: 'http://127.0.0.1:9',
+  });
+  assert.equal(on.ok, true, on.error);
+  assert.match(on.text, /x_search researches X/);
+  assert.match(on.text, /web_search searches the web/);
+});
