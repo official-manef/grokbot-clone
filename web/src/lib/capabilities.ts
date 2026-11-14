@@ -24,6 +24,8 @@ export interface CapabilityReport {
   protocol: 'responses' | 'chat';
   hostedTools: boolean;
   desktop: { mode: string; ready: boolean; image?: string; containers?: number; error?: string };
+  /** Which backend answers a turn. `byok` is a direct endpoint, `hermes` an engine that owns its own credentials. */
+  engine: 'hermes' | 'byok' | 'unconfigured';
   capabilities: Record<Capability, boolean>;
   gaps: Capability[];
   notes: string[];

@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Server } from 'node:http';
-import { env, capabilities } from './env.js';
+import { env, capabilityReport } from './env.js';
 import { api } from './routes.js';
 import { attachVncRelay } from './vnc.js';
 import { initRoutines } from './routines.js';
@@ -33,7 +33,39 @@ const app = new Hono();
 // Capability gaps answer 501 with the vars that close them; everything else gets
 // a request id. No stack or key ever reaches a client.
 app.onError(onError);
-app.get('/api/health', (c) => c.json({ ok: true, engine: capabilities.llm ? 'hermes' : 'unconfigured', model: env.llm.model || env.xaiModel }));
+/**
+ * Liveness vs readiness. `ok` is readiness: the server is up AND its configured
+ * backend exists, so a bot turn could be answered. A half-configured endpoint
+ * (model name only, key without base) is NOT ready, and the status code is 503
+ * so an uptime check pages instead of reading green while every turn dies.
+ *
+ * No network call per request by default: the answer is configuration truth.
+ * `?probe=1` adds one reachability check against the Hermes engine when that is
+ * the backend being used (never against a BYOK endpoint, whose billable path
+ * should not be hit by a monitor). Opt-in, so polling stays free.
+ */
+app.get('/api/health', async (c) => {
+  const report = capabilityReport();
+  const ok = report.ok;
+  const body: Record<string, unknown> = { ok, engine: report.engine, model: report.model, capabilities: report.capabilities };
+  if (c.req.query('probe') === '1') {
+    if (report.engine === 'hermes') {
+      try {
+        const r = await fetch(`${env.hermesUrl}/health`, { signal: AbortSignal.timeout(2500) });
+        body.reachable = r.ok;
+        if (!r.ok) body.ok = false;
+      } catch {
+        body.reachable = false;
+        body.ok = false;
+      }
+    } else if (report.engine === 'byok') {
+      body.reachable = null;
+      body.note = 'No probe for a BYOK endpoint: a reachability call would be a billable model request.';
+    }
+  }
+  const status = body.ok ? 200 : 503;
+  return c.json(body, status);
+});
 app.get('/api/capabilities', async (c) => c.json(await capabilitiesPayload()));
 // The app's tools for the agent engines (MCP).
 app.route('/mcp', mcpApi);

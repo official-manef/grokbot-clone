@@ -13,7 +13,7 @@ a reported gap, never a boot failure.
 
 | Capability | Env | Fallback when unset |
 | --- | --- | --- |
-| `llm` | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | boots; also counts as on when a Hermes engine is reachable (`HERMES_URL` or `HQ_LOCAL=1`). `/api/health` reports `engine: "unconfigured"` when neither exists |
+| `llm` | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | boots; counts as on only for a complete base+key pair, or when a Hermes engine is configured (`HERMES_URL` or `HQ_LOCAL=1`). A model name alone is not an endpoint. `/api/health` reports `engine: "unconfigured"` and HTTP 503 in that case |
 | `image` | `IMAGE_BASE_URL`, `IMAGE_API_KEY`, `IMAGE_MODEL` | `image_generate` dropped by `availableTools()`, so it is absent from the MCP tool list; `/api/capabilities` reports `capabilities.image: false` |
 | `tts` | `TTS_BASE_URL`, `TTS_API_KEY`, `TTS_MODEL` | voice preview route returns `501 capability_unavailable` |
 | `stt` | `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL` | dictation route returns `501 capability_unavailable` |
@@ -176,6 +176,10 @@ below was repeated.
 
 **Boot with no keys** (at `56fb4ff`). `.env` copied from `.env.example`, every value blank.
 `GET /api/health` → `200 {"ok":true}` (the body now also carries `engine` and `model`), and the log names the gaps:
+*Corrected by the review round: that body was a false green. `ok` is now readiness
+and answers HTTP 503 while no backend is configured; `engine` names the real one
+(`hermes` / `byok` / `unconfigured`), and `?probe=1` adds an opt-in reachability
+check against a Hermes engine only.*
 
 ```
 [env] capabilities off: llm, image, tts, stt, realtime, integrations, signin

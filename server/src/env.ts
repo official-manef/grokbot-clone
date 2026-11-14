@@ -243,6 +243,14 @@ export const capabilities: Record<Capability, boolean> = {
   signin: Boolean(composioKey),
 };
 
+/**
+ * Which backend would answer a turn, named honestly. `hermes` only when a
+ * Hermes URL (or HQ_LOCAL) is really set: a BYOK pair is a different engine and
+ * saying "hermes" for it is how a health check lied.
+ */
+export const engineName = (): 'hermes' | 'byok' | 'unconfigured' =>
+  hermesConfigured() ? 'hermes' : completePair(env.llm) ? 'byok' : 'unconfigured';
+
 /** What /api/capabilities returns. Never includes a key, only whether it exists. */
 export function capabilityReport() {
   return {
@@ -252,8 +260,8 @@ export function capabilityReport() {
     hostedTools: env.hostedTools,
     desktop: env.desktop.mode,
     capabilities,
-    /** True when bots are driven by a Hermes engine rather than a direct model call. */
-    engine: Boolean(process.env.HERMES_URL || process.env.HQ_LOCAL === '1'),
+    /** Which backend answers a turn: 'hermes', 'byok', or nothing. */
+    engine: engineName(),
     /** Non-fatal boot notes: legacy env names, skipped integrations. */
     notes: [...aliased],
   };

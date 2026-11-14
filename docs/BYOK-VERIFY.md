@@ -122,6 +122,25 @@ $ curl -s http://127.0.0.1:8787/api/capabilities
 
 Both endpoints returned HTTP 200.
 
+**That `engine:"hermes"` was wrong and this run is superseded.** No Hermes URL was
+set in §2, yet `/api/health` said `hermes` because it inferred the engine from
+`capabilities.llm`. Current behaviour (`fcd3838`'s review round):
+
+```
+$ curl -s -w ' HTTP %{http_code}\n' http://127.0.0.1:8787/api/health
+{"ok":true,"engine":"byok","model":"ollama-cloud-deepseek-v4.1-flash-1017","capabilities":{...}} HTTP 200
+```
+
+- `engine` is the backend that would answer a turn: `hermes` only when
+  `HERMES_URL`/`HQ_LOCAL=1` is set, `byok` for a complete base+key pair,
+  `unconfigured` otherwise (the same value `capabilityReport().engine` returns).
+- `ok` is readiness, not liveness: it is `true` only when a bot turn could be
+  answered, and the status is **503** when it could not. A monitor therefore
+  pages on a deployment whose model is half-configured, instead of reading green.
+- No network call is made per request. `GET /api/health?probe=1` adds one
+  reachability probe, and only against a Hermes engine; a BYOK endpoint is not
+  probed because that would be a billable model request.
+
 ## Findings
 
 - **No boot failure in the final run.** The only boot failure was the missing
@@ -131,7 +150,9 @@ Both endpoints returned HTTP 200.
 - **LLM reports configured.** `capabilities.llm` is `true`, and `/api/health`
   echoes `ok:true` with the owner-supplied model
   `ollama-cloud-deepseek-v4.1-flash-1017` and `engine:"hermes"`. The BYOK endpoint
-  is the only LLM source configured.
+  is the only LLM source configured. *(The engine name was the false green
+  described in §4 and is now `byok`; `capabilities.llm` itself was right, since
+  the pair is complete.)*
 - **Unset capabilities report false, not faked.** `image`, `tts`, `stt`,
   `realtime`, `desktop`, `integrations` are all `false`. `signin` is also `false`,
   which is expected with `DEV_LOGIN=0` and an empty `ALLOWED_EMAILS`.

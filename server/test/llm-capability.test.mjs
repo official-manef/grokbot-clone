@@ -73,6 +73,16 @@ test('llm: a configured Hermes engine is configured', async () => {
   assert.equal(r.capabilities.llm, true, 'the engine owns its own credentials');
 });
 
+test('engine name: honest, so /api/health cannot call a BYOK endpoint hermes', async () => {
+  const byok = await run('caps', {}, { LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm' });
+  assert.equal(byok.report.engine, 'byok');
+  const hermes = await run('caps', {}, { HERMES_URL: 'http://127.0.0.1:8642' });
+  assert.equal(hermes.report.engine, 'hermes');
+  const none = await run('caps', {}, { LLM_MODEL: 'm' });
+  assert.equal(none.report.engine, 'unconfigured', 'a model name is not an engine');
+  assert.equal(none.report.ok, false, '/api/health must not report ready here');
+});
+
 test('x_search: a chat-protocol endpoint cannot serve it, so it is not offered', async () => {
   const r = await run('tools', {}, {
     LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm',
