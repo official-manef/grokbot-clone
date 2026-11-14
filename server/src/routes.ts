@@ -6,6 +6,7 @@ import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
+import { checkPassword, passwordAuth } from './lib/password.js';
 import { CapabilityError } from './lib/capability-error.js';
 import { isEmailAllowed } from './lib/email-allowlist.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
@@ -71,9 +72,10 @@ function findOrCreateUser(email: string, name?: string, preferId?: string) {
 
 // ---------- auth ----------
 
-api.get('/auth/me', (c) => {
+api.get('/auth/me', async (c) => {
   const user = userFromCookieHeader(c.req.header('cookie'));
-  return c.json({ user, devLogin: env.devLogin });
+  const pw = await passwordAuth();
+  return c.json({ user, devLogin: env.devLogin, passwordLogin: pw.enabled });
 });
 
 api.get('/auth/google/start', async (c) => {
@@ -101,6 +103,59 @@ api.get('/auth/google/callback', async (c) => {
   } catch (e: any) {
     console.error('[auth] google callback', e);
     return c.redirect(`${env.appUrl}/?login=failed`);
+  }
+});
+
+/**
+ * Password sign-in. The password is shared with whatever set AUTH_PASSWORD (MSO
+ * does this with OS_LOGIN_PASSWORD); this server only keeps its scrypt hash.
+ *
+ * Rate limited in memory: five failures per address per fifteen minutes. A
+ * password endpoint without a limit is a guessing oracle, and the limit has to
+ * survive a restart badly enough that in-memory is the honest trade: losing it
+ * on restart only gives an attacker five more guesses.
+ */
+const passwordAttempts = new Map<string, { count: number; resetAt: number }>();
+const MAX_ATTEMPTS = 5;
+const ATTEMPT_WINDOW_MS = 15 * 60_000;
+
+function attemptKey(c: any): string {
+  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+  return forwarded || c.req.header('cf-connecting-ip') || 'local';
+}
+
+api.post('/auth/password', async (c) => {
+  const auth = await passwordAuth();
+  if (!auth.enabled) return c.json({ error: 'password sign-in is not configured' }, 501);
+
+  const key = attemptKey(c);
+  const now_ = Date.now();
+  const rec = passwordAttempts.get(key);
+  if (rec && rec.resetAt > now_ && rec.count >= MAX_ATTEMPTS) {
+    const wait = Math.ceil((rec.resetAt - now_) / 60_000);
+    return c.json({ error: `Too many attempts. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` }, 429);
+  }
+
+  const body = await c.req.json<{ email?: unknown; password?: unknown }>().catch(() => ({} as any));
+  const email = typeof body.email === 'string' ? body.email.trim() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!email.includes('@') || !password) return c.json({ error: 'email and password are required' }, 400);
+
+  const ok = await checkPassword(password);
+  if (!ok) {
+    const next = rec && rec.resetAt > now_ ? { count: rec.count + 1, resetAt: rec.resetAt } : { count: 1, resetAt: now_ + ATTEMPT_WINDOW_MS };
+    passwordAttempts.set(key, next);
+    console.warn(`[auth] failed password attempt for ${email} from ${key} (${next.count}/${MAX_ATTEMPTS})`);
+    // Same message either way: never say whether the address exists.
+    return c.json({ error: 'Wrong email or password.' }, 403);
+  }
+  passwordAttempts.delete(key);
+  try {
+    const { id } = findOrCreateUser(email);
+    createSession(c, id);
+    return c.json({ ok: true });
+  } catch (e: any) {
+    return c.json({ error: e instanceof UserError ? e.message : 'could not sign in' }, 403);
   }
 });
 

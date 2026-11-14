@@ -735,6 +735,35 @@ async function cmdLogs(argv) {
   return 0;
 }
 
+/** Write a password hash into .env without ever printing the password back. */
+async function cmdPasswd(argv) {
+  const envFile = process.argv.includes('--production') ? path.join(ROOT, '.env.production') : ENV_FILE;
+  const existing = readEnvFile(envFile).values;
+  const hasPassword = Boolean(existing.AUTH_PASSWORD_HASH || existing.AUTH_PASSWORD);
+  say(bold('Set the sign-in password'));
+  note('The plaintext is hashed here and never written to disk.');
+  if (hasPassword) note('A password is already set; this replaces it.');
+  const first = await askSecret('New password (input hidden)');
+  if (!first) { bad('cancelled'); return 1; }
+  if (first.length < 8) { bad('use at least 8 characters'); return 1; }
+  const second = await askSecret('Repeat it (input hidden)');
+  if (first !== second) { bad('the two entries do not match'); return 1; }
+
+  const { hashPassword } = await import('../server/src/lib/password.ts');
+  const hash = await hashPassword(first);
+  // AUTH_PASSWORD (plaintext) and AUTH_PASSWORD_HASH must not both exist: the
+  // hash wins in the server, and a stale plaintext is a secret left on disk.
+  const lines = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8').split('\n') : [];
+  const kept = lines.filter((l) => !/^\s*AUTH_PASSWORD=/.test(l) && !/^\s*AUTH_PASSWORD_HASH=/.test(l));
+  while (kept.length && kept[kept.length - 1] === '') kept.pop();
+  kept.push(`AUTH_PASSWORD_HASH=${hash}`, '');
+  await fsp.writeFile(envFile, kept.join('\n'));
+  try { await fsp.chmod(envFile, 0o600); } catch { /* windows */ }
+  ok(`password set in ${path.basename(envFile)} (scrypt, mode 600)`);
+  note('  Restart the server for it to take effect: gb dev, or systemctl --user restart grokbot-clone');
+  return 0;
+}
+
 async function cmdDev(argv) {
   const which = argv[0];
   if (which && which !== 'server' && which !== 'web') { bad('usage: gb dev [server|web]'); return 1; }
@@ -756,6 +785,7 @@ function usage() {
     ['RUN', [
       ['dev [server|web]', 'Start the dev server(s)'],
       ['login [email]', 'Sign in through the local form (needs DEV_LOGIN=1)'],
+      ['passwd', 'Set the sign-in password (hashed into .env, never printed)'],
     ]],
     ['INSPECT', [
       ['bots', 'List bots and whether they are working'],
@@ -802,6 +832,7 @@ const COMMANDS = {
   bots: cmdBots,
   login: cmdLogin,
   logs: cmdLogs,
+  passwd: cmdPasswd,
   dev: cmdDev,
 };
 
