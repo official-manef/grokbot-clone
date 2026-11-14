@@ -9,6 +9,7 @@ import './db-config.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { requireUser, type AuthVars } from './lib/auth.js';
+import { isStaffOnlyPath, staffOnlyRefusal } from './lib/staff-gate.js';
 import { getBotRow, listRoutines, listTasks } from './store.js';
 import { computerState, ensureComputer } from './computer.js';
 import { runtime as orgo, runtimeIsLocal, profileDirFor, libraryDirFor } from './runtime.js';
@@ -25,6 +26,14 @@ import type { LibraryFile, Memory, Skill } from './types.js';
 export const configApi = new Hono<AuthVars>();
 
 for (const p of ['/bots/*', '/skills/*', '/computer/*']) configApi.use(p, requireUser);
+
+// Same staff gate as routes.ts: fans are signed in, but host/files/screen/skills
+// surfaces are staff-only. Mounted separately in index.ts, hence its own hook.
+configApi.use('/*', async (c, next) => {
+  const user = c.get('user');
+  if (user && user.audience !== 'staff' && isStaffOnlyPath(c.req.path)) return staffOnlyRefusal(c);
+  return next();
+});
 
 const ownBot = (userId: string, id: string) => {
   const b = getBotRow(id);

@@ -134,6 +134,12 @@ export function attachVncRelay(server: Server) {
       socket.destroy();
       return;
     }
+    // A screen is a host desktop: control mode is root-equivalent input. Staff only.
+    if (user.audience !== 'staff') {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     const mode = url.searchParams.get('mode') === 'control' ? 'control' : 'watch';
     wss.handleUpgrade(req, socket, head, (client) => relay(client, user.id, bot.id, mode));
   });

@@ -146,5 +146,9 @@ function addColumn(table: string, col: string, ddl: string) {
 addColumn('bots', 'voice', "TEXT NOT NULL DEFAULT 'luna'");
 addColumn('bots', 'voice_speed', 'REAL NOT NULL DEFAULT 1');
 addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
+// Who the user is to us: 'staff' (artist/management) or 'fan'. Re-derived on every
+// sign-in; see lib/email-allowlist.ts. Null = never classified (pre-existing row).
+addColumn('users', 'audience', 'TEXT');
+addColumn('users', 'role', 'TEXT');
 
 export const now = () => Date.now();

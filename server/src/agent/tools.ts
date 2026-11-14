@@ -12,6 +12,7 @@ import { setCheckins } from '../proactive.js';
 import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
+import type { Audience } from '../lib/email-allowlist.js';
 import { Cron } from 'croner';
 
 export interface ToolCtx {
@@ -472,8 +473,64 @@ export const TOOLS: ToolDef[] = [
 
 export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 
-export function functionSchemas() {
-  return TOOLS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
+/**
+ * Tools that reach the host or run unattended. A fan's Bot is a chat agent, so it
+ * is offered none of these: no shell, no desktop, no host browser, no writing
+ * files into host paths, no scheduled/background work.
+ *
+ * Fans keep: remember/recall (their Bot's own memory), ask_user, send_to_bot,
+ * create_group/post_to_group, set_checkins (check-ins are chat, they run with this
+ * same fan tool set), stay_silent, and the model itself.
+ *
+ * `save_file` is staff-only because it is implemented as a shell write into the
+ * Bot's library under MSO_DESKTOP_ROOT on this host — there is no fan sandbox,
+ * so a fan gets no file tool at all rather than a half-open one.
+ */
+export const STAFF_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'shell',
+  'computer_screenshot',
+  'computer_click',
+  'computer_type',
+  'computer_key',
+  'computer_scroll',
+  'computer_drag',
+  'open_browser',
+  'save_file',
+  'create_routine',
+  'create_event_routine',
+  'list_event_triggers',
+  'update_routine',
+  'delete_routine',
+  'list_routines',
+  'create_task',
+  'update_task',
+  'request_app_connection',
+  'spawn_subagent',
+  'list_subagents',
+  'message_subagent',
+  'stop_subagent',
+]);
+
+export const isStaffOnlyTool = (name: string) => STAFF_ONLY_TOOLS.has(name);
+
+/** The tool set for one audience. Defaults to the least-privileged one. */
+export function availableTools(audience: Audience = 'fan') {
+  const allowed = audience === 'staff' ? TOOLS : TOOLS.filter((t) => !STAFF_ONLY_TOOLS.has(t.name));
+  return allowed.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
+}
+
+/** Honest refusal when a fan's model asks for something it does not have. */
+export function fanRefusal(toolName: string): string {
+  if (toolName === 'save_file' || toolName === 'shell') {
+    return 'This account has no computer or shell, so you cannot run commands or write files on a host. Tell the user plainly that this needs a staff account; do not pretend the tool does not exist.';
+  }
+  return 'This account does not have that capability (it belongs to staff accounts). Tell the user plainly; do not pretend the tool does not exist or claim the work was done.';
+}
+
+/** The stored audience for a user; anything unclassified is treated as a fan. */
+export function audienceOf(userId: string): Audience {
+  const r = db.prepare('SELECT audience FROM users WHERE id=?').get(userId) as any;
+  return r?.audience === 'staff' ? 'staff' : 'fan';
 }
 
 // ---------- approvals policy ----------

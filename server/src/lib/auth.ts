@@ -1,7 +1,9 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { db, now } from '../db.js';
+import { env } from '../env.js';
 import { token } from './ids.js';
+import { classifyEmail, type Audience, type StaffRole } from './email-allowlist.js';
 import type { User } from '../types.js';
 
 const COOKIE = 'grokbot_session';
@@ -26,7 +28,23 @@ export function userFromToken(t: string | undefined): User | null {
   const r = db
     .prepare('SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>?')
     .get(t, now()) as any;
-  return r ? { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url } : null;
+  if (!r) return null;
+  // Rows that predate the classifier have no audience. Classify them on first sight
+  // rather than defaulting to the least-privileged one, so a deploy does not silently
+  // downgrade staff who are already signed in. Sign-in re-classifies anyway.
+  let audience: Audience = r.audience === 'staff' ? 'staff' : r.audience === 'fan' ? 'fan' : 'fan';
+  let role: StaffRole | null = r.role === 'artist' || r.role === 'management' ? r.role : null;
+  if (r.audience !== 'staff' && r.audience !== 'fan') {
+    const c = classifyEmail(r.email, {
+      allowedEmails: env.allowedEmails,
+      allowedEmailDomains: env.allowedEmailDomains,
+      staffEmailDomains: env.staffEmailDomains,
+    });
+    audience = c.audience;
+    role = c.role;
+    db.prepare('UPDATE users SET audience=?, role=? WHERE id=?').run(audience, role, r.id);
+  }
+  return { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url, audience, role };
 }
 
 export function userFromCookieHeader(cookieHeader: string | undefined): User | null {

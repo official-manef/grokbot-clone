@@ -9,7 +9,8 @@ import { composioTools, toolkitInfo } from '../composio.js';
 import { systemPrompt } from './prompt.js';
 import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
-import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
+import { activityFor, audienceOf, availableTools, fanRefusal, humanizeSlug, isStaffOnlyTool, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
+import type { Audience } from '../lib/email-allowlist.js';
 
 /**
  * The model client. `env.xaiBaseUrl` defaults to xAI and can point at any gateway that
@@ -134,15 +135,18 @@ async function runTurn(botId: string, trigger: Trigger) {
       if (item) appendHistory(botId, [item]);
     }
 
+    // A fan's Bot is a chat agent: model + memory + its own conversation. No host
+    // computer, no staff tools, no app connections (the /apps surface is staff-only).
+    const audience = audienceOf(userId);
     const tools = [
-      ...functionSchemas(),
-      ...(await composioTools(userId)),
+      ...availableTools(audience),
+      ...(audience === 'staff' ? await composioTools(userId) : []),
       ...hostedTools(),
     ];
 
     for (let step = 0; step < MAX_STEPS; step++) {
       if (ctrl.signal.aborted) throw new Error('interrupted');
-      const result = await callModel(ctx, tools, ctrl.signal);
+      const result = await callModel(ctx, tools, audience, ctrl.signal);
       appendHistory(botId, result.output);
       const calls = result.output.filter((o: any) => o.type === 'function_call');
       if (!calls.length) break;
@@ -185,7 +189,16 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
     // Was this call just approved/denied?
     const ap = st.approvalId ? (db.prepare('SELECT * FROM approvals WHERE id=?').get(st.approvalId) as any) : null;
     let decision = policyFor(userId, c.name, args).decision;
-    if (ap && ap.call_id === c.call_id) {
+    // A tool the audience is never offered must not run even if the model asks for
+    // it anyway (or replays an old history item): the offer and the gate agree.
+    // For a fan that also covers Composio/app tools: /apps is staff-only, so a fan
+    // has no connections and no inner tools to run.
+    const audience = audienceOf(userId);
+    const notForAudience = audience === 'fan' && (isStaffOnlyTool(c.name) || !toolMap.has(c.name));
+    if (notForAudience) {
+      decision = 'block';
+      st.approvalId = '';
+    } else if (ap && ap.call_id === c.call_id) {
       if (ap.status === 'pending') return true;
       decision = ap.status === 'denied' ? 'block' : 'allow';
       st.approvalId = '';
@@ -208,7 +221,8 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
 
     let res: ToolResult;
     if (decision === 'block') {
-      res = { output: 'The user declined this action. Do not retry it. Find another way, or tell the user what you could not do.', summary: 'Not allowed' };
+      // Honest: say it cannot, not that the tool does not exist.
+      res = { output: notForAudience ? fanRefusal(c.name) : 'The user declined this action. Do not retry it. Find another way, or tell the user what you could not do.', summary: 'Not allowed' };
       updateRow(botId, c.rowSeq, { ...body, status: 'denied', summary: 'Not allowed' });
     } else {
       const act = activityFor(c.name);
@@ -257,7 +271,7 @@ async function finishPending(ctx: ToolCtx, st: PendingState, _reason: string) {
 
 // ---------- model call with streaming into a message row ----------
 
-async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promise<{ output: any[] }> {
+async function callModel(ctx: ToolCtx, tools: any[], audience: Audience, signal: AbortSignal): Promise<{ output: any[] }> {
   const { botId, userId } = ctx;
   const bot = getBotRow(botId);
   // Runs inside the bot's serial queue, so compaction can't race a turn.
@@ -284,7 +298,7 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
     // A gateway may reject a tool kind it does not implement. Retry with our own
     // function tools only, then (if even those are refused) with no hosted tools at all.
     if (e?.status === 400) {
-      const own = [...functionSchemas()];
+      const own = [...availableTools(audience)];
       if (tools.length > own.length) {
         console.warn('[agent] 400 with extra tools, retrying with function tools only:', e?.message);
         body.tools = own;

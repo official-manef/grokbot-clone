@@ -75,8 +75,10 @@ export const env = {
   devLogin: process.env.DEV_LOGIN === '1',
   /** Comma-separated emails allowed to sign in; empty = no email rule (see allowedEmailDomains). */
   allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
-  /** Comma-separated domains allowed to sign in; leading `@` optional. Empty = no domain rule. */
+  /** Comma-separated extra staff domains (leading `@` optional). Additive to staffEmailDomains. */
   allowedEmailDomains: (process.env.ALLOWED_EMAIL_DOMAINS ?? '').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
+  /** Comma-separated company domains. An address here is staff (artist/management); everyone else is a fan. */
+  staffEmailDomains: (process.env.STAFF_EMAIL_DOMAINS ?? 'antinrml.com').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
   dbPath: process.env.DB_PATH ?? new URL('../../data/grokbot.db', import.meta.url).pathname,
 
   /** Composio powers app connections and Google sign-in. Optional. */

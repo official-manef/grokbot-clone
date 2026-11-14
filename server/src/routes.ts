@@ -4,7 +4,8 @@ import { db, now } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
-import { isEmailAllowed } from './lib/email-allowlist.js';
+import { classifyEmail, isSignableEmail } from './lib/email-allowlist.js';
+import { isStaffOnlyPath, staffOnlyRefusal } from './lib/staff-gate.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
@@ -42,15 +43,32 @@ function createBot(userId: string, b: { name: string; label?: string; descriptio
 /** Thrown for things the user can fix; the message is shown to them. */
 class UserError extends Error {}
 
+/** The email lists, read once. Fans are never refused; staff is a classification. */
+const emailLists = () => ({
+  allowedEmails: env.allowedEmails,
+  allowedEmailDomains: env.allowedEmailDomains,
+  staffEmailDomains: env.staffEmailDomains,
+});
+
 function findOrCreateUser(email: string, name?: string, preferId?: string) {
-  // Refusal is identical for an email and a domain rejection: it says nothing about which list refused.
-  if (!isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains })) throw new UserError('This account is not allowed to sign in here.');
+  // Staff or fan is a classification, not a refusal. The only address we turn away
+  // is one that is not an address at all ("no @", nothing before/after it), because
+  // there is nothing to classify or show the user.
+  if (!isSignableEmail(email)) throw new UserError('That does not look like an email address.');
+  const c = classifyEmail(email, emailLists());
   const existing = db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any;
-  if (existing) return { id: existing.id as string, isNew: false };
+  if (existing) {
+    // Re-classify on every sign-in: a fan who becomes staff must not stay a fan,
+    // and a staffer who leaves must lose staff access.
+    if (existing.audience !== c.audience || (existing.role ?? null) !== c.role) {
+      db.prepare('UPDATE users SET audience=?, role=? WHERE id=?').run(c.audience, c.role, existing.id);
+    }
+    return { id: existing.id as string, isNew: false, ...c };
+  }
   const id = preferId ?? newId('usr');
-  db.prepare('INSERT INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run(id, email, name ?? email.split('@')[0], now());
+  db.prepare('INSERT INTO users(id,email,name,audience,role,created_at) VALUES (?,?,?,?,?,?)').run(id, email, name ?? email.split('@')[0], c.audience, c.role, now());
   createBot(id, { name: 'Quinn', label: 'Chief of Staff', description: 'Your main point of contact. Checks in proactively and coordinates work with your other Bots.', avatarShape: 'blob', avatarColor: 'black', isPrimary: true });
-  return { id, isNew: true };
+  return { id, isNew: true, ...c };
 }
 
 // ---------- auth ----------
@@ -107,6 +125,15 @@ api.post('/auth/logout', (c) => { destroySession(c); return c.json({ ok: true })
 api.use('/*', async (c, next) => {
   if (c.req.path.startsWith('/api/auth/') || c.req.path.startsWith('/api/apps/callback') || c.req.path === '/api/health') return next();
   return requireUser(c, next);
+});
+
+// Staff gate. Fans are signed in, not blocked — but nothing staff-only may be
+// reached by one. Applied after the session middleware so `user` is present.
+api.use('/*', async (c, next) => {
+  if (c.req.path === '/api/health' || c.req.path === '/api/apps/callback') return next();
+  const user = c.get('user');
+  if (user && user.audience !== 'staff' && isStaffOnlyPath(c.req.path)) return staffOnlyRefusal(c);
+  return next();
 });
 
 // ---------- events (SSE) ----------
