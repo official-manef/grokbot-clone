@@ -40,13 +40,20 @@ esbuild shipped its prebuilt linux-x64 binary via the optional dependency
 ### 2. `.env` (BYOK only)
 
 Created `.env` (gitignored) with exactly the requested keys — no `XAI_*`,
-`ORGO_*`, `COMPOSIO_*`:
+`ORGO_*`, `COMPOSIO_*`. The session secret is generated, never copied: it keys
+the HMACs behind owner sign-in and the agent MCP tokens, so a literal value in
+this doc (or in any doc) would be a working recipe to mint an owner session for
+any email on any deployment that reused it. Generate a fresh one per host:
+
+```
+$ SESSION_SECRET=$(openssl rand -hex 32)   # then put it in .env
+```
 
 ```
 PORT=8787
 APP_URL=http://localhost:5173
 SERVER_URL=http://localhost:8787
-SESSION_SECRET=byok-verify-local-only-0123456789abcdef
+SESSION_SECRET=$(openssl rand -hex 32)
 DEV_LOGIN=0
 ALLOWED_EMAILS=
 DESKTOP_MODE=disabled
