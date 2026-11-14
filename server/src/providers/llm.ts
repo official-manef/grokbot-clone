@@ -13,7 +13,8 @@ import { env } from '../env.js';
  * Callers ask the adapter; they never build a URL.
  */
 
-export const llmConfigured = Boolean(env.llm.key);
+/** One definition, in env.ts: a complete BYOK pair, or a Hermes engine that owns its own credentials. */
+export { llmConfigured } from '../env.js';
 
 let client: OpenAI | null = null;
 export function llm(): OpenAI {

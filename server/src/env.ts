@@ -203,14 +203,37 @@ export const env = {
   get orgoResolution() { return env.orgo.resolution; },
 };
 
+/** A complete pair: base and key. Half an endpoint is not an endpoint. */
+const completePair = (e: { base: string; key: string }) => Boolean(e.base && e.key);
+
+/** True when a Hermes engine that owns its own credentials is configured here. */
+export const hermesConfigured = () =>
+  Boolean(process.env.HERMES_URL?.trim() || process.env.HQ_LOCAL === '1');
+
+/**
+ * The one definition of "the LLM is configured". Everything else asks here.
+ *
+ * A model name alone is NOT an endpoint: with no base URL and no key there is
+ * nothing to call, and `endpoint()` returns null for the same reason. A model
+ * with no base is an OAuth provider (nous, codex) whose credential lives in
+ * Hermes' own auth store, which this process cannot see from its env; that case
+ * is counted through the Hermes branch, where the engine really owns it.
+ */
+export const llmConfigured = () => completePair(env.llm) || hermesConfigured();
+
+/** The local web_search tool, defined once for the capability contract and the tool list. */
+export const searchConfigured = () => Boolean(env.search);
+
+/**
+ * The hosted x_search tool: an opt-in, and it only exists on the Responses
+ * protocol (a chat-completions gateway has no such tool), with a model and a
+ * complete endpoint to post to.
+ */
+export const xSearchAvailable = () =>
+  Boolean(env.xSearch && completePair(env.llm) && env.llmProtocol === 'responses' && env.llm.model);
+
 export const capabilities: Record<Capability, boolean> = {
-  // A bot answers if either a BYOK endpoint is configured or a Hermes engine runs.
-  // Three ways a bot can answer: a BYOK key, an OAuth provider Hermes holds a
-  // credential for (nous/welcome and friends, which have a model but no key),
-  // or an engine that is already running.
-  llm: Boolean(llmKey) ||
-    Boolean(llmModel && !llmBase) ||
-    Boolean(process.env.HERMES_URL || process.env.HQ_LOCAL === '1'),
+  llm: llmConfigured(),
   image: Boolean(image),
   tts: Boolean(tts),
   stt: Boolean(stt),

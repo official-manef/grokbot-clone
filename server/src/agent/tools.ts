@@ -2,7 +2,8 @@ import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { box, libraryDirFor, profileDirFor } from '../box.js';
-import { env } from '../env.js';
+import { env, xSearchAvailable, searchConfigured } from '../env.js';
+import { CapabilityError } from '../lib/capability-error.js';
 import { generateImage, imageConfigured } from '../providers/image.js';
 import { screenFor } from '../computer.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
@@ -81,10 +82,10 @@ function botByName(userId: string, name: string) {
 
 /**
  * True when the configured endpoint can serve the hosted `x_search` tool.
- * Opt-in, because the tool is a vendor-hosted feature of the Responses API: a
- * BYOK gateway that speaks chat completions has no such tool to call.
+ * The predicate lives in env.ts with the rest of the capability contract; this
+ * is only the name the tool layer uses.
  */
-export const xSearchConfigured = () => Boolean(env.xSearch && env.llm.base && env.llm.key);
+export const xSearchConfigured = xSearchAvailable;
 
 /** Live X research through the configured endpoint's hosted search tool. Returns the answer text followed by the posts it cites. */
 async function xSearch(a: any): Promise<string> {
@@ -136,7 +137,7 @@ async function xSearch(a: any): Promise<string> {
  * A local web search. Any endpoint that takes `{ query }` with a bearer key and
  * returns a result list; the three shapes in the wild are read by `parseResults`.
  */
-export const webSearchConfigured = () => Boolean(env.search);
+export const webSearchConfigured = searchConfigured;
 
 async function webSearch(a: any): Promise<string> {
   if (!env.search) {
