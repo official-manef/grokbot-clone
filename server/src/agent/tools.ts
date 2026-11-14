@@ -132,6 +132,57 @@ async function xSearch(a: any): Promise<string> {
   return (sources.length ? `${text}\n\nSources:\n${sources.map((u) => `- ${u}`).join('\n')}` : text).slice(0, 60000);
 }
 
+/**
+ * A local web search. Any endpoint that takes `{ query }` with a bearer key and
+ * returns a result list; the three shapes in the wild are read by `parseResults`.
+ */
+export const webSearchConfigured = () => Boolean(env.search);
+
+async function webSearch(a: any): Promise<string> {
+  if (!env.search) {
+    throw new Error('web_search is not available. Set SEARCH_BASE_URL (and SEARCH_API_KEY) to a search endpoint that returns { title, url, snippet } results.');
+  }
+  const n = Math.min(Math.max(Number(a.max_results ?? 8) || 8, 1), 20);
+  const res = await fetch(`${env.search.base}/search`, {
+    method: 'POST',
+    headers: {
+      ...(env.search.key ? { Authorization: `Bearer ${env.search.key}` } : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: String(a.query ?? ''), max_results: n }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await res.text();
+  let json: any;
+  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+  if (!res.ok) {
+    const msg = json?.error?.message ?? json?.detail ?? json?.message ?? `${res.status} ${res.statusText}`;
+    const err = new Error(`search endpoint (${res.status}): ${String(msg).slice(0, 300)}`);
+    (err as any).status = res.status;
+    throw err;
+  }
+  const results = parseResults(json).slice(0, n);
+  if (!results.length) return 'No results came back.';
+  // Compact and cited: title, url, snippet. Nothing else survives the hop to the model.
+  return results.map((r, i) => `${i + 1}. ${r.title}\n${r.url}${r.snippet ? `\n${r.snippet}` : ''}`).join('\n\n').slice(0, 20000);
+}
+
+/** Accepts `results[]`, Brave's `web.results[]`, or a bare array; each item title/url/description|snippet. */
+export function parseResults(json: any): { title: string; url: string; snippet: string }[] {
+  const arr: any[] = Array.isArray(json) ? json : json?.results ?? json?.web?.results ?? json?.data ?? [];
+  const out: { title: string; url: string; snippet: string }[] = [];
+  for (const item of Array.isArray(arr) ? arr : []) {
+    const url = typeof item === 'string' ? item : item?.url ?? item?.link;
+    if (typeof url !== 'string' || !url) continue;
+    out.push({
+      title: String(item?.title ?? item?.name ?? url).slice(0, 300),
+      url,
+      snippet: String(item?.snippet ?? item?.description ?? item?.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 600),
+    });
+  }
+  return out;
+}
+
 /** Where each bot's Library lives on the shared computer. */
 export const LIBRARY_ROOT = '/root/grokbot/files';
 
@@ -326,6 +377,21 @@ export const TOOLS: ToolDef[] = [
     impl: async (a) => {
       const r = await xSearch(a);
       return { output: r, summary: 'Searched X' };
+    },
+  },
+  {
+    // Only offered when SEARCH_BASE_URL is set: same discipline as image_generate.
+    name: 'web_search',
+    description: 'Search the web and get back a short cited list (title, url, snippet). Use for current facts, news, prices and anything you cannot answer from your own knowledge.',
+    parameters: obj({
+      query: { type: 'string', description: 'What to find out, in plain words.' },
+      max_results: { type: 'integer', description: 'How many results to return (default 8, max 20).' },
+    }, ['query']),
+    activity: 'searching_web',
+    label: 'Searching the web',
+    impl: async (a) => {
+      const r = await webSearch(a);
+      return { output: r, summary: 'Searched the web' };
     },
   },
   {
@@ -541,6 +607,8 @@ export function availableTools(): ToolDef[] {
   const desktopOn = env.desktop.mode !== 'disabled';
   return TOOLS.filter((t) => {
     if (t.name === 'image_generate') return imageConfigured();
+    // Local search: hidden until an endpoint is configured.
+    if (t.name === 'web_search') return webSearchConfigured();
     // Vendor-hosted tool: only advertised when the operator opted in for this endpoint.
     if (t.name === 'x_search') return xSearchConfigured();
     if (t.name.startsWith('computer_') || t.name === 'open_browser' || t.name === 'save_file' || t.name === 'shell') return desktopOn;
