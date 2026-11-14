@@ -139,6 +139,77 @@ Both endpoints returned HTTP 200.
   silent faking.
 - **`hostedTools` is false** — no vendor-hosted tool surface is claimed.
 
+## Verified
+
+Follow-up task A2 closed the three vendor gaps the earlier run left open. One
+commit per gap, on `feat/byok-latest`:
+
+| Commit | Change |
+| --- | --- |
+| `2e278b3` | feat(byok): route x_search through the configured endpoint |
+| `2541db7` | feat(byok): add the local web_search tool |
+| (this commit) | docs: make the BYOK contract match the code |
+
+### What was executed
+
+`npm run typecheck` (root, both workspaces) after each gap: clean, no output
+beyond the `tsc -p tsconfig.json --noEmit` banners. Nothing was stashed: no
+pre-existing typecheck failure appeared.
+
+Tests were run directly with `node --import tsx --test` — the repo wires no test
+script (`package.json` has `dev`/`build`/`start`/`typecheck`/`setup`/`doctor`
+only; `tests/e2e.mjs` is a Playwright smoke test that needs a live server, a real
+Hermes gateway and a real desktop, so it is not part of this check).
+
+```
+$ node --import tsx --test server/test/providers.test.mjs server/test/desktop.test.mjs \
+    server/test/x-search.test.mjs server/test/web-search.test.mjs
+ℹ tests 23   ℹ pass 23   ℹ fail 0
+```
+
+New cases:
+
+- `server/test/x-search.test.mjs` (4/4): hidden without `LLM_X_SEARCH`, listed
+  with it, the request goes to `{LLM_BASE_URL}/responses` with
+  `Bearer LLM_API_KEY` and `LLM_MODEL`, and a call with the flag unset answers a
+  capability error without touching the endpoint (a stub server records zero
+  requests).
+- `server/test/web-search.test.mjs` (5/5): hidden without `SEARCH_BASE_URL`,
+  listed with it, `POST {SEARCH_BASE_URL}/search` carries `Bearer SEARCH_API_KEY`
+  and returns `title / url / snippet`, no key means no `Authorization` header,
+  and a 429 surfaces as an error instead of an uncaught throw.
+
+Each case runs in its own process (`server/test/_tools-probe.mjs`), because
+`env.ts` resolves once per process, exactly as at boot.
+
+### `availableTools()` on a BYOK-only endpoint
+
+Probed with the same BYOK-only env as §2 above plus `DESKTOP_MODE=disabled`,
+`LLM_PROTOCOL=chat`, and no `LLM_X_SEARCH` / `SEARCH_BASE_URL`:
+
+```
+remember, create_routine, list_event_triggers, create_event_routine, stay_silent,
+set_checkins, list_routines, update_routine, delete_routine, create_task,
+update_task, send_to_bot, create_group, post_to_group, ask_user,
+request_app_connection
+```
+
+No `x_search`, no `web_search`, no `image_generate`, no computer/browser/shell
+tools. `x_search` appears only with `LLM_X_SEARCH=1`; `web_search` only with
+`SEARCH_BASE_URL` set.
+
+### Still not exercised
+
+- No live `x_search` or `web_search` call against a real endpoint: there is no
+  endpoint in this environment that implements either. What is proven is the URL,
+  the header, the response parsing and the refusal path, all against stubs.
+- `server/src/agent/prompt.ts` still names `x_search` in the system prompt
+  unconditionally, so a BYOK bot is told about a tool its MCP list does not
+  offer. Harmless (the tool list is authoritative and a call would answer the
+  capability error) but not yet filtered by `availableTools()`; fixing it means
+  touching the prompt cache, which this task did not.
+
+
 ## Blocked / not executed
 
 - **LLM inference not exercised.** Only configuration was verified; no chat

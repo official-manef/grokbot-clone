@@ -59,14 +59,20 @@ a managed engine's `config.yaml` gets `api_mode: chat_completions` or `responses
 from `LLM_PROTOCOL`, and the engine's own OpenAI-style (or Anthropic) credentials from
 `LLM_BASE_URL`/`LLM_API_KEY`.
 
-The one hardcoded vendor host left is `https://api.x.ai/v1/responses` in
-`agent/tools.ts` (`x_search`), called with the `LLM_API_KEY`/`XAI_API_KEY` value.
-`x_search` is always listed by `availableTools()`.
+No vendor host is hardcoded any more. `x_search` (`agent/tools.ts`) posts to
+`{LLM_BASE_URL}/responses` with `LLM_API_KEY`/`LLM_MODEL`, and
+`availableTools()` lists it only when `LLM_X_SEARCH=1`. The flag is opt-in
+because the hosted `x_search` tool is a feature of the vendor's Responses API,
+not of every OpenAI-compatible gateway; called while unset, the tool answers a
+capability error naming `LLM_X_SEARCH` instead of fetching anything.
 
 `LLM_HOSTED_TOOLS` is read in `env.ts`. It is echoed by `/api/capabilities` and
-consulted by `providers/llm.ts` (`responsesBody`), but nothing calls that function. **Planned, not built:** a local `web_search`
-function tool backed by a search endpoint. `env.ts` parses that setting into
-`env.search`, but no tool or route reads it, and it is not in `.env.example`.
+consulted by `providers/llm.ts` (`responsesBody`), but nothing calls that function.
+`web_search` is now a real local tool: `POST {SEARCH_BASE_URL}/search` with
+`{ query, max_results }` and a `Bearer SEARCH_API_KEY`, returning a compact cited
+list (title, url, snippet). It is listed by `availableTools()` only when
+`SEARCH_BASE_URL` is set, and answers a capability error naming
+`SEARCH_BASE_URL`/`SEARCH_API_KEY` when called unset.
 
 ## 3. Docker blur (replacement for Orgo)
 
@@ -163,7 +169,10 @@ version listed two adapter modules beyond the three in `server/src/providers/`; 
 repo.)
 
 Re-run at HEAD on 2026-11-14: `npx tsx --test server/test/providers.test.mjs` (8/8 pass)
-and `npm run typecheck` (clean). Nothing else below was repeated.
+and `npm run typecheck` (clean). The tool-layer tests added with `x_search` and
+`web_search` (`server/test/x-search.test.mjs`, `server/test/web-search.test.mjs`)
+also pass; totals are in `docs/BYOK-VERIFY.md` under "Verified". Nothing else
+below was repeated.
 
 **Boot with no keys** (at `56fb4ff`). `.env` copied from `.env.example`, every value blank.
 `GET /api/health` → `200 {"ok":true}` (the body now also carries `engine` and `model`), and the log names the gaps:

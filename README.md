@@ -62,7 +62,7 @@ endpoints and Anthropic Claude are first-class choices. See
 | **Connected apps with approvals** | Bots ask for the app they need and you connect it through Composio. Actions that write (send, post, delete) wait for your OK on a card in the chat. |
 | **Model and subscription per bot** | Pick the provider and model in the bot's Engine panel, or sign in to a subscription on the bot's own screen. |
 | **Voice** | Talk to a bot with xAI's realtime voice modes. Real work is handed to the same bot, with the same memory and tools. |
-| **Research on X** | Every bot has an `x_search` tool, backed by xAI. |
+| **Research on the web and X** | `web_search` when `SEARCH_BASE_URL` is set, `x_search` when the configured endpoint offers the hosted tool (`LLM_X_SEARCH=1`). |
 | **Routines, tasks and a Library** | Recurring jobs on a schedule, a task list per bot, and a place where bots save the files they make. |
 
 <table>
@@ -96,7 +96,7 @@ flowchart LR
 - **One computer, one screen per bot.** All bots live on a single Orgo Linux computer. The first bot uses the computer's main screen; each further bot gets an Orgo screen of its own. Orgo allows four screens per computer, so four bots.
 - **The first bot is the Hermes agent that already runs on that computer.** The app talks to its gateway and never restarts it or rewrites its settings.
 - **Every other bot gets its own Hermes home and gateway**, started by the app. Each has its own model, sign-in, memory, browser profile and files.
-- **The app's tools reach Hermes over MCP.** The server exposes `/mcp/<bot>`. Each agent gets connected apps, `x_search`, tasks, routines, the Library, and messages to other bots.
+- **The app's tools reach Hermes over MCP.** The server exposes `/mcp/<bot>`. Each agent gets connected apps, `web_search`, `x_search`, tasks, routines, the Library, and messages to other bots.
 - **Screens are dressed to look like the bot's own computer**: a light desktop with a dock, and a home screen with the bot's name and apps as Chrome's new tab page.
 
 More detail is in the [architecture guide](docs/ARCHITECTURE.md).
@@ -173,7 +173,9 @@ The keys you need:
 | `ORGO_API_KEY`, `ORGO_COMPUTER_ID` | The shared computer and its screens (`DESKTOP_MODE=orgo` or `HQ_LOCAL=1` only; the default `docker` mode needs neither) |
 | `COMPOSIO_API_KEY` | Connected apps and Google sign-in |
 | `LLM_*`, `IMAGE_*`, `TTS_*`, `STT_*`, `REALTIME_*` | Model, image, speech and realtime endpoints, each optional (see below) |
-| `XAI_API_KEY` | `x_search`, and the `LLM_API_KEY` fallback when `LLM_*` is unset |
+| `XAI_API_KEY` | The `LLM_API_KEY` fallback when `LLM_*` is unset (legacy name) |
+| `SEARCH_BASE_URL`, `SEARCH_API_KEY` | The local `web_search` tool; unset hides the tool |
+| `LLM_X_SEARCH` | Opt-in: `1` advertises `x_search` when the configured endpoint implements the hosted tool |
 | `SESSION_SECRET` | Owner sign-in links and the tokens agents use to reach `/mcp`. Unset, the server picks a random one per process, so both stop working at every restart |
 
 ## Models and subscriptions
@@ -191,13 +193,14 @@ makes every integration optional and independent.
 | xAI key required at boot | `LLM_*` BYOK; any OpenAI-compatible endpoint. `LLM_PROTOCOL=responses\|chat` decides the `api_mode` written into each managed bot's Hermes config |
 | Missing key crashes | an unset capability is reported at `GET /api/capabilities`; where a route is called anyway it answers `501 capability_unavailable`, naming the env vars |
 | Voice only via xAI | TTS / STT / realtime are three independent BYOK capabilities in `server/src/providers/speech.ts` |
-| Every tool always offered | `image_generate` appears only when `IMAGE_*` is set; the computer, browser, shell and `save_file` tools only when `DESKTOP_MODE` is not `disabled` |
+| Every tool always offered | `image_generate` appears only when `IMAGE_*` is set; `web_search` only when `SEARCH_BASE_URL` is set; `x_search` only when `LLM_X_SEARCH=1`; the computer, browser, shell and `save_file` tools only when `DESKTOP_MODE` is not `disabled` |
 
 The Hermes engine still runs the bots. What changed is where the screen and the model come
 from: `DESKTOP_MODE` picks the screen backend (`docker`, `orgo`, `mso`, `disabled`) and the
 `LLM_*` block supplies an endpoint when you do not want to rely on an engine's own credentials.
-`x_search` still calls `api.x.ai` directly and needs an xAI key. A local replacement for
-`web_search` is planned, not built.
+`x_search` posts to `{LLM_BASE_URL}/responses` and needs `LLM_X_SEARCH=1` (the hosted
+tool is a vendor feature, so it is opt-in). `web_search` is a local tool backed by
+`SEARCH_BASE_URL`; unset, it is not offered.
 
 ```bash
 docker build -t grokbot-desktop:latest server/desktop   # the box a bot works in
