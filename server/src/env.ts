@@ -179,8 +179,10 @@ export const env = {
   primaryCdpUrl: process.env.PRIMARY_CDP_URL ?? '',
   /** Bots that can each have a screen. */
   maxBots: Number(process.env.MAX_BOTS ?? 4),
-  /** Comma-separated emails allowed to sign in; empty = anyone who can reach the app. */
+  /** Comma-separated emails allowed to sign in; empty = no email rule (see allowedEmailDomains). */
   allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  /** Comma-separated email domains allowed to sign in (a leading '@' is dropped); empty = no domain rule. */
+  allowedEmailDomains: (process.env.ALLOWED_EMAIL_DOMAINS ?? '').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
 
   /** Kept for the orgo mode only, so the old path still compiles while it exists. */
   orgo: {

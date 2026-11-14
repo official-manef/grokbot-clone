@@ -52,6 +52,7 @@ if [ ! -f "$APP/.env" ]; then
     echo "SESSION_SECRET=$(openssl rand -hex 32)"
     echo "DEV_LOGIN=${DEV_LOGIN:-0}"
     echo "ALLOWED_EMAILS=${ALLOWED_EMAILS:-}"
+    echo "ALLOWED_EMAIL_DOMAINS=${ALLOWED_EMAIL_DOMAINS:-}"
     echo "DB_PATH=$DATA/hq.db"
     echo "ENGINES_DIR=$DATA/engines"
     echo "HERMES_BIN=$(command -v hermes || echo /usr/local/bin/hermes)"

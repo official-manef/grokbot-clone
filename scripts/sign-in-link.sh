@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Print a link that signs one browser in to the app, once, within 15 minutes. Run ON the computer, as root.
 #   bash sign-in-link.sh you@example.com
-# For when Google sign-in is not set up or not working. The address must be in ALLOWED_EMAILS
-# (or already have an account). The key it uses never leaves this machine.
+# For when Google sign-in is not set up or not working. The address must be in ALLOWED_EMAILS,
+# on an ALLOWED_EMAIL_DOMAINS domain, or already have an account. The key never leaves this machine.
 set -euo pipefail
 email="${1:?usage: sign-in-link.sh <email>}"
 ENV_FILE="${ENV_FILE:-/opt/hq/app/.env}"

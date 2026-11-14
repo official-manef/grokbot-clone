@@ -7,6 +7,7 @@ import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { CapabilityError } from './lib/capability-error.js';
+import { isEmailAllowed } from './lib/email-allowlist.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
@@ -56,8 +57,10 @@ function createBot(userId: string, b: { name: string; label?: string; descriptio
 function findOrCreateUser(email: string, name?: string, preferId?: string) {
   // The allow-list is checked before the lookup, not after it. An account created
   // while the list was empty must stop working once the list is set, or the list
-  // only ever gates new arrivals.
-  if (env.allowedEmails.length && !env.allowedEmails.includes(email.toLowerCase())) throw new UserError('This account is not allowed to sign in here.');
+  // only ever gates new arrivals. The predicate and its four empty/non-empty cases
+  // live in lib/email-allowlist.ts; the refusal is deliberately identical for an
+  // email and a domain rejection so it says nothing about which list refused.
+  if (!isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains })) throw new UserError('This account is not allowed to sign in here.');
   const existing = db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any;
   if (existing) return { id: existing.id as string, isNew: false };
   const id = preferId ?? newId('usr');
