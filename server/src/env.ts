@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Capability, ToolCapability } from './lib/capability-error.js';
+import { parseOrigins } from './lib/origin-check.js';
 
 // Every optional integration resolves here, once, at boot. Nothing below throws
 // for a missing key: a capability is either configured or it is reported as a
@@ -112,6 +113,27 @@ const authProvider: AuthProvider = authProviderRaw
 const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
 const serverUrl = process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`;
 
+/**
+ * How the session cookie is scoped.
+ *
+ * `lax` (default) is right for a normal top-level app: the cookie is not sent on
+ * cross-site subrequests, which is the CSRF default we want.
+ *
+ * `none` exists for one deployment: a console that embeds this app in an iframe on a
+ * different site (MSO's shell does, from a different host). A `Lax` cookie is NOT sent
+ * inside a third-party frame, so the embedded app would render signed out forever.
+ * `SameSite=None` requires `Secure`, so this is refused unless the app is served over
+ * HTTPS — a half-configured embed must fail loudly at boot rather than half-work.
+ */
+export type CookieSameSite = 'lax' | 'none' | 'strict';
+const cookieSameSite = (process.env.SESSION_COOKIE_SAMESITE?.trim().toLowerCase() || 'lax') as CookieSameSite;
+if (!['lax', 'none', 'strict'].includes(cookieSameSite)) {
+  throw new Error(`SESSION_COOKIE_SAMESITE must be "lax", "none" or "strict" (got "${cookieSameSite}")`);
+}
+if (cookieSameSite === 'none' && !appUrl.startsWith('https:')) {
+  throw new Error('SESSION_COOKIE_SAMESITE=none needs APP_URL to be https: a browser rejects SameSite=None without Secure, so the session would silently never be sent.');
+}
+
 /** A URL on this machine. Unparseable counts as not local, so it reads as deployed. */
 function isLoopbackUrl(raw: string): boolean {
   try {
@@ -146,6 +168,14 @@ export const env = {
   appUrl,
   /** Public URL of this server, used for OAuth callbacks. */
   serverUrl,
+  /** `SameSite` for the session cookie. `none` only for embedding on another site. */
+  cookieSameSite,
+  /**
+   * Extra origins allowed to drive state-changing requests, beyond this app and this
+   * server. Set only when a console embeds this app; it is the CSRF allowlist that
+   * replaces what `SameSite=Lax` used to give for free.
+   */
+  embedAllowedOrigins: parseOrigins(process.env.EMBED_ALLOWED_ORIGINS),
   sessionSecret,
   devLogin: process.env.DEV_LOGIN === '1',
   /** True when this process looks deployed (see above); the dev-login guard needs it. */

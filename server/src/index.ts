@@ -22,6 +22,7 @@ import { mcpApi } from './mcp.js';
 import { initEngines } from './engine.js';
 import { onError } from './lib/error-handler.js';
 import { capabilitiesPayload } from './lib/capabilities.js';
+import { checkOrigin, parseOrigins } from './lib/origin-check.js';
 
 if (!desSelfTest()) throw new Error('DES self-test failed');
 initSubagents();
@@ -33,6 +34,29 @@ const app = new Hono();
 // Capability gaps answer 501 with the vars that close them; everything else gets
 // a request id. No stack or key ever reaches a client.
 app.onError(onError);
+
+/**
+ * CSRF gate. With the default `SameSite=Lax` cookie this is belt-and-braces; with
+ * `SESSION_COOKIE_SAMESITE=none` (an embedded deployment) it is the only thing
+ * stopping another site from driving this API with the user's cookie.
+ *
+ * The own-origins list is derived here, not configured, so it cannot drift from the
+ * URLs the server actually advertises. `EMBED_ALLOWED_ORIGINS` adds the console that
+ * frames the app and nothing else.
+ */
+const ownOrigins = parseOrigins([env.appUrl, env.serverUrl].join(','));
+app.use('/api/*', async (c, next) => {
+  const verdict = checkOrigin({
+    method: c.req.method,
+    path: c.req.path,
+    origin: c.req.header('origin'),
+    ownOrigins,
+    allowedOrigins: env.embedAllowedOrigins,
+  });
+  if (verdict.ok) return next();
+  if (verdict.reason === 'missing') console.warn(`[csrf] ${c.req.method} ${c.req.path} had no Origin header`);
+  return c.json({ error: 'cross-site request refused' }, 403);
+});
 /**
  * Liveness vs readiness. `ok` is readiness: the server is up AND its configured
  * backend exists, so a bot turn could be answered. A half-configured endpoint
