@@ -55,6 +55,24 @@ the first: proxies append, so the first hop is whatever the caller sent. Set
 address with nothing in front; with no header and no proxy the socket address is used,
 so two direct clients never share a bucket.
 
+### Embedding this app in another site's frame
+
+An MSO console on another host can frame this app. Two settings go together, and
+neither is safe alone:
+
+| Env | Values | Why |
+| --- | --- | --- |
+| `SESSION_COOKIE_SAMESITE` | `lax` (default), `none`, `strict` | A `Lax` cookie is **not** sent inside a third-party frame, so an embedded app renders signed out. `none` needs an https `APP_URL`; a browser drops `SameSite=None` without `Secure`, so `env.ts` refuses to boot rather than ship a frame that silently has no session |
+| `EMBED_ALLOWED_ORIGINS` | comma-separated exact origins | The console that frames the app. This replaces the CSRF cover `SameSite=Lax` gave for free |
+
+`lib/origin-check.ts` is the replacement cover. Every unsafe request (`POST`, `PUT`,
+`PATCH`, `DELETE`) must carry an `Origin` that is this app's, this server's, or one
+listed above; a missing `Origin` is refused rather than waved through, because every
+browser sends one and its absence means a non-browser client. `/mcp/*` is exempt: it
+authenticates with a bearer token, which a cross-site form cannot supply. An embedded
+deployment that forgets this does not fail visibly — it accepts cross-site writes —
+so the two variables belong in the same change.
+
 ## 2. Provider adapters
 
 `server/src/providers/` holds three modules, one per family of capability:
