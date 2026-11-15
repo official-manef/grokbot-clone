@@ -382,6 +382,9 @@ api.post('/auth/dev', async (c) => {
     flag: env.devLogin,
     production: env.production,
     forwardedFor: c.req.header('x-forwarded-for') ?? null,
+    // The socket peer, so a directly-exposed server ignores a header the caller
+    // wrote. `remoteAddress` returns undefined only in a non-node harness.
+    remote: remoteAddress(c),
     staff: isStaffEmail(email),
   });
   if (!verdict.allowed) {

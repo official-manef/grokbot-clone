@@ -16,8 +16,7 @@
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "test": "node --import tsx --test server/test/*.test.mjs",
     "setup": "node bin/gb init",
-    "doctor": "node bin/gb doctor",
-    "test": "node --test server/test/*.test.mjs"
+    "doctor": "node bin/gb doctor"
   },
   "engines": {
     "node": ">=22"

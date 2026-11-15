@@ -20,6 +20,10 @@
  * than one process; add a reputation feed when a botnet is the actual threat.
  */
 
+import { clientAddress, trustedProxyHops } from './client-identity.js';
+
+export { trustedProxyHops };
+
 type Bucket = { count: number; resetAt: number };
 
 const privilegedBuckets = new Map<string, Bucket>();
@@ -29,43 +33,11 @@ const untrustedBuckets = new Map<string, Bucket>();
 export const MAX_KEYS = 4096;
 
 /**
- * How many proxies sit in front of this server. Traefik/Apache/nginx APPEND the
- * address they saw, so the trustworthy hop is counted from the END of
- * `x-forwarded-for`, never from the start: a client that sends
- * `X-Forwarded-For: 1.2.3.4` gets its real address appended after it, and reading
- * the first hop would hand the caller a free, self-chosen bucket.
- *
- * Default 1 = exactly one trusted proxy. Behind two, set TRUSTED_PROXY_HOPS=2 or
- * every caller looks like the inner proxy. `0` ignores the header entirely, which
- * is right when the server binds a public address with nothing in front.
- */
-export function trustedProxyHops(raw = process.env.TRUSTED_PROXY_HOPS): number {
-  const n = Number(raw ?? '1');
-  return Number.isInteger(n) && n >= 0 && n <= 10 ? n : 1;
-}
-
-/**
- * Identity for the limiter: the client hop `trustedProxyHops()` from the end of
- * `x-forwarded-for`, else `x-real-ip`, else the socket address.
- *
- * The socket is the last resort and it is NOT shared: two direct clients on
- * different addresses stay in different buckets. Only a server with no address at
- * all (a test harness) answers 'unknown', and that one bucket is deliberately
- * shared — it is a bug to run that way, not a deployment.
+ * The caller's bucket key. Address logic lives in `client-identity.ts` so this
+ * limiter and the dev-login guard cannot disagree about who the caller is.
  */
 export function clientKey(headers: Headers, remote?: string, hops = trustedProxyHops()): string {
-  if (hops > 0) {
-    const chain = (headers.get('x-forwarded-for') ?? '')
-      .split(',')
-      .map((h) => h.trim())
-      .filter(Boolean);
-    // chain[length - hops] is the address the outermost trusted proxy saw.
-    const hop = chain[chain.length - hops];
-    if (hop) return hop;
-    const realIp = headers.get('x-real-ip')?.trim();
-    if (realIp) return realIp;
-  }
-  return remote || 'unknown';
+  return clientAddress(headers, remote, hops);
 }
 
 function limit(buckets: Map<string, Bucket>, key: string, max: number, windowMs: number, now: number): boolean {

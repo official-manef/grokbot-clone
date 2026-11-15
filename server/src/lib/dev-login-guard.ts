@@ -26,6 +26,8 @@
  * Not imported by tests only: `routes.ts` runs this exact function.
  */
 
+import { isLocalRequest, isLoopbackPeer as loopbackPeer } from './client-identity.js';
+
 export type DevLoginRefusal = 'disabled' | 'production' | 'network' | 'not-staff';
 
 export interface DevLoginInput {
@@ -35,30 +37,34 @@ export interface DevLoginInput {
   production: boolean;
   /** Raw `x-forwarded-for` header, or undefined when the proxy sent none. */
   forwardedFor?: string | null;
+  /**
+   * The socket peer's address. Required for a real decision: a header alone cannot
+   * prove the request is local, because with no proxy in front the caller wrote it.
+   * Undefined means a test harness, where only the header rule is exercised.
+   */
+  remote?: string;
   /** `isEmailAllowed()` of the requested address. */
   staff: boolean;
 }
 
 export type DevLoginDecision = { allowed: true } | { allowed: false; reason: DevLoginRefusal };
 
-const LOOPBACK = /^(::1|::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3})$/;
-
 /**
- * True when the request came from this machine. The first entry of
- * `x-forwarded-for` is the original client (`client, proxy1, proxy2`), so that is
- * the one compared. No header at all means nothing in front of us. Anything
- * unparseable counts as foreign.
+ * True when the request came from this machine. Re-exported from
+ * `client-identity.ts`, which owns the hop rule: proxies append, so a
+ * client-written `127.0.0.1` lands before the real address and must not count.
  */
-export function isLoopbackPeer(forwardedFor?: string | null): boolean {
-  const raw = (forwardedFor ?? '').split(',')[0].trim().toLowerCase();
-  if (!raw) return true;
-  return LOOPBACK.test(raw);
-}
+export const isLoopbackPeer = loopbackPeer;
 
 export function devLoginAllowed(input: DevLoginInput): DevLoginDecision {
   if (!input.flag) return { allowed: false, reason: 'disabled' };
   if (!input.staff) return { allowed: false, reason: 'not-staff' };
   if (input.production) return { allowed: false, reason: 'production' };
-  if (!isLoopbackPeer(input.forwardedFor)) return { allowed: false, reason: 'network' };
+  // Both facts, not either: a loopback socket AND a loopback trusted hop. The
+  // socket check is what makes a directly-exposed server ignore a header the
+  // client wrote; the hop check is what makes a proxied server ignore one the
+  // client wrote in front of the proxy's appended address.
+  const headers = input.forwardedFor ? new Headers({ 'x-forwarded-for': input.forwardedFor }) : undefined;
+  if (!isLocalRequest(headers, input.remote)) return { allowed: false, reason: 'network' };
   return { allowed: true };
 }
