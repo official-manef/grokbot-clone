@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from './env.js';
+import { USAGE_DAILY_DDL } from './lib/usage-quota.js';
 
 fs.mkdirSync(path.dirname(env.dbPath), { recursive: true });
 export const db = new Database(env.dbPath);
@@ -140,6 +141,11 @@ CREATE TABLE IF NOT EXISTS composio_sessions (
   session_id TEXT NOT NULL
 );
 `);
+
+// The per-user per-UTC-day token/request ledger, read and written by
+// lib/usage-quota.ts. Its DDL lives in that module so production and its tests
+// cannot drift apart.
+db.exec(USAGE_DAILY_DDL);
 
 // Idempotent column migrations for tables that predate a column.
 function addColumn(table: string, col: string, ddl: string) {
