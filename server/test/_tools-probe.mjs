@@ -20,7 +20,13 @@ const out = (value) => process.stdout.write(MARK + JSON.stringify(value) + '\n')
 try {
   switch (kind) {
     case 'tools':
-      out({ ok: true, names: availableTools().map((t) => t.name) });
+      out({
+        ok: true,
+        names: availableTools().map((t) => t.name),
+        // Descriptions matter: the model reads them, so a wrong one is a wrong
+        // belief about the box. Same probe, one extra field.
+        descriptions: Object.fromEntries(availableTools().map((t) => [t.name, t.description])),
+      });
       break;
     case 'caps':
       out({ ok: true, capabilities, report: capabilityReport() });
