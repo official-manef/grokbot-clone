@@ -37,6 +37,24 @@ count hits per client in a fixed window (`server/src/lib/rate-limit.ts`) and ans
 per address, because every engine on the host arrives from one address. The counter
 lives in process memory, so a restart forgives everyone.
 
+The limiter has two pools that never share a map: `ip:` keys for pre-auth traffic and
+`user:`/`bot:` keys for authenticated traffic. They are separate because an
+unauthenticated caller can mint `ip:` keys at will, and a shared map would let that
+churn evict — or reset — a signed-in user's bucket. Both pools are capped at
+`MAX_KEYS = 4096` and evict least-recently-used.
+
+`POST /api/bots/:id/messages` is the one route that spends model tokens per call, so
+it is limited per signed-in user (`turns`: 60/minute). `interrupt` and `fresh` share a
+tighter `actions` budget. The numbers are provisional: they stop a script, and the real
+values are an operator decision.
+
+Client identity comes from the trusted hop at the **end** of `X-Forwarded-For`, never
+the first: proxies append, so the first hop is whatever the caller sent. Set
+`TRUSTED_PROXY_HOPS` to the number of proxies in front of this server (default `1`).
+`0` ignores the header entirely, which is correct when the server binds a public
+address with nothing in front; with no header and no proxy the socket address is used,
+so two direct clients never share a bucket.
+
 ## 2. Provider adapters
 
 `server/src/providers/` holds three modules, one per family of capability:

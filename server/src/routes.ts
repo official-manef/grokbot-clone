@@ -11,7 +11,7 @@ import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieH
 import { checkPassword, passwordAuth } from './lib/password.js';
 import { CapabilityError } from './lib/capability-error.js';
 import { isEmailAllowed } from './lib/email-allowlist.js';
-import { clientKey, hit } from './lib/rate-limit.js';
+import { clientKey, rateLimited, rateLimitedUntrusted, retryAfterSeconds } from './lib/rate-limit.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
@@ -43,6 +43,9 @@ class UserError extends Error {}
 /**
  * A ceiling on the endpoints that run before a session exists. Each bucket is
  * per client, so one noisy address cannot lock everyone else out.
+ *
+ * `ponytail:` provisional numbers, not a capacity plan. They stop one script or
+ * one address; the real values are an operator decision.
  */
 const LIMITS = {
   // Sign in: a human types an email a few times at most, a script types thousands.
@@ -51,21 +54,43 @@ const LIMITS = {
   signInStart: { limit: 20, windowMs: 5 * 60_000 },
   // A used link is deleted, so this only bounds guessing.
   link: { limit: 20, windowMs: 5 * 60_000 },
+  // Authenticated, and the only route that spends model tokens per call.
+  turns: { limit: 60, windowMs: 60_000 },
+  // Cheap but abusable owner actions that change state.
+  actions: { limit: 20, windowMs: 60_000 },
 } as const;
 
+/** One 429 body for every limited path: it says "wait", not which wall was hit. */
+function tooMany(c: Context<AuthVars>, key: string) {
+  return c.json({ error: 'too many requests' }, 429, { 'Retry-After': String(retryAfterSeconds(key)) });
+}
+
+/** The socket address, when this request came straight to us. */
+function remoteAddress(c: Context<AuthVars>): string | undefined {
+  try { return getConnInfo(c).remote.address; } catch { return undefined; }
+}
+
+type IpBucket = 'dev' | 'owner' | 'signInStart' | 'link';
+type UserBucket = 'turns' | 'actions';
+
 /**
- * Count the call and answer `429` with `Retry-After` when the bucket is full.
- * `getConnInfo` reads the socket; a proxy in front makes that the proxy, which
- * is why the header is preferred (see `clientKey`).
+ * Pre-auth limit. `ip:` pool, because an unauthenticated caller can mint keys.
+ * Every sign-in route goes through here before it touches the database.
  */
-async function withinLimit(c: Context<AuthVars>, bucket: keyof typeof LIMITS): Promise<Response | null> {
+function withinIpLimit(c: Context<AuthVars>, bucket: IpBucket): Response | null {
   const { limit, windowMs } = LIMITS[bucket];
-  let remote: string | undefined;
-  try { remote = getConnInfo(c).remote.address; } catch { /* no node bindings, e.g. a test harness */ }
-  const r = hit(bucket, clientKey(c.req.raw.headers, remote), limit, windowMs);
-  if (r.ok) return null;
-  c.header('Retry-After', String(r.retryAfter));
-  return c.json({ error: 'too many attempts, try again later' }, 429);
+  const key = `ip:${clientKey(c.req.raw.headers, remoteAddress(c))}`;
+  return rateLimitedUntrusted(key, limit, windowMs) ? tooMany(c, key) : null;
+}
+
+/**
+ * Signed-in limit. `user:` pool, keyed by the session's user, so a user behind a
+ * shared address (office NAT, a proxy) never spends anyone else's budget.
+ */
+function withinUserLimit(c: Context<AuthVars>, bucket: UserBucket): Response | null {
+  const { limit, windowMs } = LIMITS[bucket];
+  const key = `user:${c.get('user').id}`;
+  return rateLimited(key, limit, windowMs) ? tooMany(c, key) : null;
 }
 
 const agentCount = (userId: string) => (db.prepare("SELECT COUNT(*) n FROM bots WHERE user_id=? AND COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0").get(userId) as any).n as number;
@@ -152,7 +177,7 @@ async function composioStart(c: Context<AuthVars>) {
 api.get('/auth/google/start', async (c) => {
   // The start route writes a login_attempts row on every call, so it needs the
   // same ceiling as the rest of sign-in.
-  const limited = await withinLimit(c, 'signInStart');
+  const limited = withinIpLimit(c, 'signInStart');
   if (limited) return limited;
   if (env.authProvider === 'composio') return composioStart(c);
   if (!workosConfigured()) return signInNotConfigured(c);
@@ -171,7 +196,7 @@ api.get('/auth/google/start', async (c) => {
 
 api.get('/auth/workos/callback', async (c) => {
   // A code exchange is a call to a paid third party with a secret; bound it.
-  const limited = await withinLimit(c, 'signInStart');
+  const limited = withinIpLimit(c, 'signInStart');
   if (limited) return limited;
   if (!workosConfigured()) return signInNotConfigured(c);
   const state = c.req.query('state') ?? '';
@@ -269,7 +294,7 @@ api.post('/auth/password', async (c) => {
 
 api.post('/auth/dev', async (c) => {
   if (!env.devLogin) return c.json({ error: 'disabled' }, 403);
-  const limited = await withinLimit(c, 'dev');
+  const limited = withinIpLimit(c, 'dev');
   if (limited) return limited;
   const { email, name } = await c.req.json<{ email: string; name?: string }>();
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
@@ -289,7 +314,7 @@ const signInLinks = new Map<string, { userId: string; expires: number }>();
 // With `link`, it answers with a link that signs one browser in, once (scripts/sign-in-link.sh).
 api.post('/auth/owner', async (c) => {
   if (!isOwnerKey((c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, ''))) return c.json({ error: 'forbidden' }, 403);
-  const limited = await withinLimit(c, 'owner');
+  const limited = withinIpLimit(c, 'owner');
   if (limited) return limited;
   const { email, name, link } = await c.req.json<{ email: string; name?: string; link?: boolean }>();
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
@@ -308,7 +333,7 @@ api.post('/auth/owner', async (c) => {
 });
 
 api.get('/auth/link/:token', async (c) => {
-  const limited = await withinLimit(c, 'link');
+  const limited = withinIpLimit(c, 'link');
   if (limited) return limited;
   const token = c.req.param('token');
   const l = signInLinks.get(token);
@@ -434,6 +459,9 @@ api.get('/bots/:id/rows', (c) => {
 });
 
 api.post('/bots/:id/messages', async (c) => {
+  // The one route that spends model tokens per call: checked before any work.
+  const limited = withinUserLimit(c, 'turns');
+  if (limited) return limited;
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const { text } = await c.req.json<{ text: string }>();
@@ -447,6 +475,8 @@ api.post('/bots/:id/messages', async (c) => {
 });
 
 api.post('/bots/:id/interrupt', (c) => {
+  const limited = withinUserLimit(c, 'actions');
+  if (limited) return limited;
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);
@@ -454,6 +484,8 @@ api.post('/bots/:id/interrupt', (c) => {
 });
 
 api.post('/bots/:id/fresh', (c) => {
+  const limited = withinUserLimit(c, 'actions');
+  if (limited) return limited;
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);

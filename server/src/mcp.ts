@@ -5,7 +5,7 @@ import { composioTools } from './composio.js';
 import { mcpToken, primaryBotId } from './engine.js';
 import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, requestApproval, turnDepth } from './agent/loop.js';
 import { availableTools, policyFor, runComposioTool, toolMap, type ToolCtx } from './agent/tools.js';
-import { hit } from './lib/rate-limit.js';
+import { rateLimited, retryAfterSeconds } from './lib/rate-limit.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -147,10 +147,12 @@ mcpApi.post('/:bot', async (c) => {
   const slug = c.req.param('bot');
   const who = caller(slug, c.req.header('authorization'));
   if (!who) return c.json(rpcError(null, -32001, 'Unauthorized'), 401);
-  const r = hit('mcp', slug, MCP_LIMIT, MCP_WINDOW_MS);
-  if (!r.ok) {
-    c.header('Retry-After', String(r.retryAfter));
-    return c.json(rpcError(null, -32000, 'Too many tool calls; slow down.'), 429);
+  // Per bot, in the privileged pool: the token is already an HMAC of SESSION_SECRET.
+  const key = `bot:${slug}`;
+  if (rateLimited(key, MCP_LIMIT, MCP_WINDOW_MS)) {
+    return c.json(rpcError(null, -32000, 'Too many tool calls; slow down.'), 429, {
+      'Retry-After': String(retryAfterSeconds(key)),
+    });
   }
   let body: any;
   try { body = await c.req.json(); } catch { return c.json(rpcError(null, -32700, 'Parse error'), 400); }
