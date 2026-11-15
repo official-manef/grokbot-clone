@@ -18,7 +18,7 @@ const WORDS: Record<Capability, string> = {
   realtime: 'voice calls',
   desktop: 'bot desktops',
   integrations: 'app connections',
-  signin: 'Google sign-in',
+  signin: 'Staff sign-in',
 };
 
 function list(words: string[]): string {
