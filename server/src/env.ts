@@ -23,6 +23,25 @@ if (backendRaw !== 'mso' && backendRaw !== 'orgo') {
   throw new Error(`COMPUTER_BACKEND must be "mso" or "orgo" (got "${backendRaw}")`);
 }
 
+/**
+ * Which sign-in flow `/auth/google/start` runs.
+ *  - `workos`   (default when configured): WorkOS AuthKit.
+ *  - `composio`: the older Composio-managed Google (Gmail) connection, kept for back-compat.
+ * With no AUTH_PROVIDER set, WorkOS wins as soon as both of its vars are present.
+ */
+export type AuthProvider = 'workos' | 'composio';
+const workosApiKey = opt('WORKOS_API_KEY');
+const workosClientId = opt('WORKOS_CLIENT_ID');
+const authProviderRaw = opt('AUTH_PROVIDER').toLowerCase();
+if (authProviderRaw && authProviderRaw !== 'workos' && authProviderRaw !== 'composio') {
+  throw new Error(`AUTH_PROVIDER must be "workos" or "composio" (got "${authProviderRaw}")`);
+}
+const authProvider: AuthProvider = authProviderRaw
+  ? (authProviderRaw as AuthProvider)
+  : workosApiKey && workosClientId
+    ? 'workos'
+    : 'composio';
+
 export const env = {
   port: Number(process.env.PORT ?? 8787),
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
@@ -81,11 +100,23 @@ export const env = {
   staffEmailDomains: (process.env.STAFF_EMAIL_DOMAINS ?? 'antinrml.com').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
   dbPath: process.env.DB_PATH ?? new URL('../../data/grokbot.db', import.meta.url).pathname,
 
-  /** Composio powers app connections and Google sign-in. Optional. */
+  /** Composio powers app connections and, with AUTH_PROVIDER=composio, Google sign-in. Optional. */
   composioKey: opt('COMPOSIO_API_KEY'),
   get composioEnabled(): boolean {
     return env.composioKey.length > 0;
   },
+
+  // ---- sign-in (WorkOS AuthKit) ----
+  /**
+   * Exposed here so boot-time validation and `authProvider` agree with what
+   * `lib/workos.ts` reads; that module reads `process.env` lazily (same values) so it
+   * stays import-free for `node --test`.
+   */
+  /** WorkOS secret key (`sk_...`). Server-side only; never sent to the browser or logged. */
+  workosApiKey,
+  /** WorkOS client id (`client_...`). Public, but only the server builds the URL. */
+  workosClientId,
+  authProvider,
 };
 
 export const idleDefaults = {
