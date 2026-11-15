@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { db, now } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
+import { authorizationUrl, exchangeCode, workosConfigured } from './lib/workos.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { CapabilityError } from './lib/capability-error.js';
@@ -76,20 +78,90 @@ api.get('/auth/me', (c) => {
   return c.json({ user, devLogin: env.devLogin });
 });
 
+/**
+ * WorkOS sign-in.
+ *
+ * `state` IS the `login_attempts` row id: `newId()` is 9 random bytes (unguessable),
+ * the row is deleted before the code exchange (single use), and the table needs no
+ * schema change on a live production database.
+ */
+const LOGIN_ATTEMPT_TTL_MS = 10 * 60_000;
+const workosCallbackUrl = () => `${env.serverUrl}/api/auth/workos/callback`;
+const loginFailed = (c: Context<AuthVars>) => c.redirect(`${env.appUrl}/?login=failed`);
+
+/**
+ * Sign-in being unconfigured is a deployment state, not a crash: answer 503 with a
+ * readable body and log it once. An unhandled throw here is the 500 that this
+ * handler was rewritten to stop producing.
+ */
+let unconfiguredLogged = false;
+function signInNotConfigured(c: Context<AuthVars>) {
+  if (!unconfiguredLogged) {
+    unconfiguredLogged = true;
+    console.warn(`[auth] sign-in not configured (AUTH_PROVIDER=${env.authProvider}); set WORKOS_API_KEY and WORKOS_CLIENT_ID`);
+  }
+  return c.json({ error: 'sign-in not configured' }, 503);
+}
+
+async function composioStart(c: Context<AuthVars>) {
+  if (!env.composioEnabled) return signInNotConfigured(c);
+  try {
+    const attemptId = newId('login');
+    const provisional = newId('usr');
+    const cb = `${env.serverUrl}/api/auth/google/callback?attempt=${attemptId}`;
+    const { redirectUrl, connectedAccountId } = await startGoogleLogin(provisional, cb);
+    db.prepare('INSERT INTO login_attempts(id,provisional_user_id,connected_account_id,created_at) VALUES (?,?,?,?)').run(attemptId, provisional, connectedAccountId ?? null, now());
+    return c.redirect(redirectUrl);
+  } catch (e: any) {
+    console.error('[auth] composio start', e?.message ?? e);
+    return c.json({ error: 'sign-in unavailable' }, 503);
+  }
+}
+
 api.get('/auth/google/start', async (c) => {
-  const attemptId = newId('login');
-  const provisional = newId('usr');
-  const cb = `${env.serverUrl}/api/auth/google/callback?attempt=${attemptId}`;
-  const { redirectUrl, connectedAccountId } = await startGoogleLogin(provisional, cb);
-  db.prepare('INSERT INTO login_attempts(id,provisional_user_id,connected_account_id,created_at) VALUES (?,?,?,?)').run(attemptId, provisional, connectedAccountId ?? null, now());
-  return c.redirect(redirectUrl);
+  if (env.authProvider === 'composio') return composioStart(c);
+  if (!workosConfigured()) return signInNotConfigured(c);
+  try {
+    const state = newId('state');
+    // Opportunistic cleanup so abandoned attempts do not accumulate.
+    db.prepare('DELETE FROM login_attempts WHERE created_at < ?').run(now() - LOGIN_ATTEMPT_TTL_MS);
+    // provisional_user_id is unused on this path: the profile comes back from the code.
+    db.prepare('INSERT INTO login_attempts(id,provisional_user_id,connected_account_id,created_at) VALUES (?,?,?,?)').run(state, '', null, now());
+    return c.redirect(authorizationUrl({ redirectUri: workosCallbackUrl(), state }));
+  } catch (e: any) {
+    console.error('[auth] workos start', e?.message ?? e);
+    return c.json({ error: 'sign-in unavailable' }, 503);
+  }
+});
+
+api.get('/auth/workos/callback', async (c) => {
+  if (!workosConfigured()) return signInNotConfigured(c);
+  const state = c.req.query('state') ?? '';
+  const code = c.req.query('code') ?? '';
+  // No state, no code, or a state we never issued (or issued over ten minutes ago):
+  // refuse. The reason never reaches the browser.
+  if (!state || !code) return loginFailed(c);
+  const live = db.prepare('SELECT 1 FROM login_attempts WHERE id=? AND created_at>=?').get(state, now() - LOGIN_ATTEMPT_TTL_MS);
+  if (!live) return loginFailed(c);
+  // Consumed before the exchange, so a replay of the same state finds nothing.
+  db.prepare('DELETE FROM login_attempts WHERE id=?').run(state);
+  try {
+    const profile = await exchangeCode(code);
+    // Re-classifies audience/role on every sign-in (see lib/email-allowlist.ts).
+    const { id } = findOrCreateUser(profile.email, profile.name);
+    createSession(c, id);
+    return c.redirect(`${env.appUrl}/`);
+  } catch (e: any) {
+    console.error('[auth] workos callback', e?.message ?? e);
+    return loginFailed(c);
+  }
 });
 
 api.get('/auth/google/callback', async (c) => {
   const attempt = db.prepare('SELECT * FROM login_attempts WHERE id=?').get(c.req.query('attempt') ?? '') as any;
   const caId = c.req.query('connected_account_id') ?? attempt?.connected_account_id;
-  if (!attempt || c.req.query('status') === 'failed' || !caId) return c.redirect(`${env.appUrl}/?login=failed`);
-  if (attempt.connected_account_id && caId !== attempt.connected_account_id) return c.redirect(`${env.appUrl}/?login=failed`);
+  if (!attempt || c.req.query('status') === 'failed' || !caId) return loginFailed(c);
+  if (attempt.connected_account_id && caId !== attempt.connected_account_id) return loginFailed(c);
   db.prepare('DELETE FROM login_attempts WHERE id=?').run(attempt.id);
   try {
     const profile = await googleProfile(caId);
@@ -100,7 +172,7 @@ api.get('/auth/google/callback', async (c) => {
     return c.redirect(`${env.appUrl}/`);
   } catch (e: any) {
     console.error('[auth] google callback', e);
-    return c.redirect(`${env.appUrl}/?login=failed`);
+    return loginFailed(c);
   }
 });
 
