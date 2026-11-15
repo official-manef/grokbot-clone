@@ -8,6 +8,7 @@ import { authorizationUrl, exchangeCode, workosConfigured } from './lib/workos.j
 import { hub } from './lib/hub.js';
 import { classifyEmail, isSignableEmail } from './lib/email-allowlist.js';
 import { isStaffOnlyPath, staffOnlyRefusal } from './lib/staff-gate.js';
+import { devLoginAllowed } from './lib/dev-login-guard.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
@@ -75,9 +76,12 @@ function findOrCreateUser(email: string, name?: string, preferId?: string) {
 
 // ---------- auth ----------
 
+/** Effective dev-login switch: the flag must also survive the production gate. */
+const devLoginEnabled = () => env.devLogin && (!env.production || env.devLoginAllowProduction);
+
 api.get('/auth/me', (c) => {
   const user = userFromCookieHeader(c.req.header('cookie'));
-  return c.json({ user, devLogin: env.devLogin });
+  return c.json({ user, devLogin: devLoginEnabled() });
 });
 
 /**
@@ -179,11 +183,24 @@ api.get('/auth/google/callback', async (c) => {
 });
 
 api.post('/auth/dev', async (c) => {
-  if (!env.devLogin) return c.json({ error: 'disabled' }, 403);
-  const { email, name } = await c.req.json<{ email: string; name?: string }>();
-  if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
+  const body = await c.req.json<{ email: string; name?: string }>().catch((): { email: string; name?: string } => ({ email: '' }));
+  const email = (body?.email ?? '').trim();
+  const classification = isSignableEmail(email) ? classifyEmail(email, emailLists()) : { audience: 'fan' as const, role: null };
+  const decision = devLoginAllowed({
+    flag: env.devLogin,
+    production: env.production,
+    forwardedFor: c.req.header('x-forwarded-for'),
+    classification,
+    override: env.devLoginAllowProduction,
+  });
+  if (!decision.allowed) {
+    // One line, no address and no secrets: a refusal trail that cannot leak who tried.
+    console.warn(`[auth] dev login refused (${decision.reason})`);
+    return c.json({ error: 'disabled' }, 403);
+  }
+  if (!isSignableEmail(email)) return c.json({ error: 'email required' }, 400);
   try {
-    const { id } = findOrCreateUser(email, name);
+    const { id } = findOrCreateUser(email, body.name);
     createSession(c, id);
     return c.json({ ok: true });
   } catch (e: any) {

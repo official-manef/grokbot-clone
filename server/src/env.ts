@@ -42,11 +42,35 @@ const authProvider: AuthProvider = authProviderRaw
     ? 'workos'
     : 'composio';
 
+/**
+ * Does this process look like production? Derived, not a single flag, because a
+ * lone `DEV_LOGIN=1` in a production `.env` was enough to open a staff-session
+ * factory. Two signals, either one wins:
+ *   - `NODE_ENV=production` (the usual marker), or
+ *   - a non-loopback public URL: `SERVER_URL` or `APP_URL` pointing anywhere other
+ *     than localhost/127.x/[::1]. Production here is `https://grok.antinrml.com`,
+ *     so the deployed process is closed even if nobody exports NODE_ENV.
+ */
+const LOOPBACK_HOST = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\]|::1)$/;
+function isPublicUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return !LOOPBACK_HOST.test(host);
+  } catch {
+    return false;
+  }
+}
+const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
+const serverUrl = process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`;
+const production = process.env.NODE_ENV === 'production' || isPublicUrl(serverUrl) || isPublicUrl(appUrl);
+
 export const env = {
   port: Number(process.env.PORT ?? 8787),
-  appUrl: process.env.APP_URL ?? 'http://localhost:5173',
+  appUrl,
+  /** See `production` above: NODE_ENV=production, or APP_URL/SERVER_URL off loopback. */
+  production,
   /** Public URL of this server, used for OAuth callbacks. */
-  serverUrl: process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`,
+  serverUrl,
 
   // ---- model ----
   /**
@@ -92,6 +116,13 @@ export const env = {
 
   sessionSecret: reqEither(['SESSION_SECRET']),
   devLogin: process.env.DEV_LOGIN === '1',
+  /**
+   * The only thing that can open dev login *in production*. Absent by default, so
+   * production is closed even when `DEV_LOGIN=1` leaks into `.env`. Set it to `1`
+   * only for a deliberate, temporary production debug session. It never admits a
+   * staff address (see lib/dev-login-guard.ts).
+   */
+  devLoginAllowProduction: process.env.DEV_LOGIN_ALLOW_PRODUCTION === '1',
   /** Comma-separated emails allowed to sign in; empty = no email rule (see allowedEmailDomains). */
   allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   /** Comma-separated extra staff domains (leading `@` optional). Additive to staffEmailDomains. */
