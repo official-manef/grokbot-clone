@@ -7,12 +7,26 @@ import { TrafficLights } from './Sidebar';
 
 export function SignIn() {
   const devLogin = useStore((s) => s.devLogin);
+  const passwordLogin = useStore((s) => s.passwordLogin);
   const checkAuth = useStore((s) => s.checkAuth);
   const canGoogle = useCapability('signin');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(() => (new URLSearchParams(location.search).get('login') === 'failed' ? 'Sign-in didn’t finish. Try again.' : null));
+
+  const withPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.includes('@')) { setError('Enter an email address'); return; }
+    if (!password) { setError('Enter your password'); return; }
+    setBusy(true); setError(null);
+    try {
+      await api.passwordLogin(email.trim(), password);
+      setPassword('');
+      await checkAuth();
+    } catch (err) { setError((err as Error).message); setBusy(false); }
+  };
 
   const dev = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +49,15 @@ export function SignIn() {
             <GoogleG /> Sign in with Google
           </a>
         )}
-        {devLogin && (
+        {passwordLogin && (
+          <form className="signin__dev" onSubmit={withPassword}>
+            <div className="signin__divider"><span>Sign in</span></div>
+            <input className="text-input" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email" autoComplete="username" />
+            <input className="text-input" type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password" autoComplete="current-password" />
+            <button type="submit" className="btn btn--primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          </form>
+        )}
+        {devLogin && !passwordLogin && (
           <form className="signin__dev" onSubmit={dev}>
             <div className="signin__divider"><span>Dev sign-in</span></div>
             <input className="text-input" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email" />
