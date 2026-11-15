@@ -485,15 +485,29 @@ async function cmdInit(argv) {
   }
 
   // ---- 3. sign-in ----
-  heading('3. Sign-in');
-  // Off unless asked for: it signs anyone in as any email address, so it is a
-  // testing switch and not a default. Non-interactive also leaves it off.
+  heading('3. Sign-in (staff only)');
+  note('This app is internal: a session can reach shell and the host files, so only');
+  note('artists and management sign in. Fans use the game / antinrml.com instead.');
+  // Off unless asked for: it signs an allowlisted address in with no credential, so
+  // it is a testing switch and not a default (the server also refuses it off-loopback
+  // and in production). Non-interactive also leaves it off.
   const signIn = nonInteractive ? false : await confirm('Enable the local email sign-in? (DEV_LOGIN=1, for testing only)', false);
   patch.DEV_LOGIN = signIn ? '1' : '0';
+  if (!nonInteractive) {
+    // Both empty means nobody can sign in at all (the allowlist fails closed).
+    patch.ALLOWED_EMAIL_DOMAINS = await ask('ALLOWED_EMAIL_DOMAINS (staff domain, e.g. antinrml.com)', existing.ALLOWED_EMAIL_DOMAINS ?? '');
+    patch.ALLOWED_EMAILS = await ask('ALLOWED_EMAILS (extra addresses, comma-separated)', existing.ALLOWED_EMAILS ?? '');
+    if (!patch.ALLOWED_EMAILS && !patch.ALLOWED_EMAIL_DOMAINS) {
+      warn('Neither ALLOWED_EMAILS nor ALLOWED_EMAIL_DOMAINS is set: nobody can sign in.');
+    }
+  }
   if (!signIn) {
-    warn('Without DEV_LOGIN you need COMPOSIO_API_KEY for Google sign-in.');
-    const c = await askSecret('COMPOSIO_API_KEY (input hidden, blank to skip)');
-    if (c) patch.COMPOSIO_API_KEY = c;
+    warn('Google sign-in no longer exists in this app. Staff sign-in uses WorkOS AuthKit');
+    warn('plus the allowlist above; in the WorkOS dashboard also disable sign-up.');
+    const k = await askSecret('WORKOS_API_KEY (input hidden, blank to skip)');
+    if (k) patch.WORKOS_API_KEY = k;
+    const c = await ask('WORKOS_CLIENT_ID (blank to skip)', existing.WORKOS_CLIENT_ID ?? '');
+    if (c) patch.WORKOS_CLIENT_ID = c;
   }
 
   // ---- 4. optional capabilities ----
@@ -587,7 +601,19 @@ async function cmdDoctor(argv) {
   } else add('computer', 'ok', `mode ${mode}`);
 
   add('hermes', (await hermesAvailable()) ? 'ok' : 'fail', (await hermesAvailable()) ? 'CLI on PATH' : 'install the `hermes` CLI');
-  add('signin', v.DEV_LOGIN === '1' ? 'ok' : v.COMPOSIO_API_KEY ? 'ok' : 'warn', v.DEV_LOGIN === '1' ? 'local email form enabled' : v.COMPOSIO_API_KEY ? 'Composio' : 'set DEV_LOGIN=1 or COMPOSIO_API_KEY');
+  // Staff-only sign-in: WorkOS AuthKit plus a non-empty allowlist. Both lists empty
+  // means the server admits nobody, so that is a warn even with credentials present.
+  const allowlisted = Boolean(v.ALLOWED_EMAILS || v.ALLOWED_EMAIL_DOMAINS);
+  const authkit = Boolean(v.WORKOS_API_KEY && v.WORKOS_CLIENT_ID);
+  add(
+    'signin',
+    authkit && allowlisted ? 'ok' : 'warn',
+    v.DEV_LOGIN === '1' ? 'local email form enabled (testing only)'
+      : authkit && allowlisted ? 'AuthKit, staff allowlist set'
+      : authkit ? 'WORKOS_* set, but ALLOWED_EMAILS/ALLOWED_EMAIL_DOMAINS is empty: nobody can sign in'
+      : allowlisted ? 'allowlist set, but WORKOS_API_KEY/WORKOS_CLIENT_ID missing'
+      : 'set WORKOS_API_KEY + WORKOS_CLIENT_ID and an allowlist',
+  );
   add('image', v.IMAGE_BASE_URL && v.IMAGE_API_KEY ? 'ok' : 'off', v.IMAGE_BASE_URL ? 'configured' : 'hidden, no IMAGE_* endpoint');
   add('speech', v.TTS_BASE_URL || v.STT_BASE_URL ? 'ok' : 'off', v.TTS_BASE_URL ? 'configured' : 'hidden, no TTS_*/STT_* endpoint');
   add('apps', v.COMPOSIO_API_KEY ? 'ok' : 'off', v.COMPOSIO_API_KEY ? 'configured' : 'hidden, no COMPOSIO_API_KEY');

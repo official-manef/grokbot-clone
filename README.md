@@ -131,7 +131,7 @@ The app is meant to run on the same Orgo computer as Hermes.
 
    `KEYS_FILE` holds `XAI_API_KEY=` and `COMPOSIO_API_KEY=` lines (and `ORGO_API_KEY=` if Hermes' own `.env` has none); it is deleted after the first install. `PRIMARY_CDP_URL` is only for a main agent that already has its own Chrome. The script installs to `/opt/hq`, adds one supervisor program (`hq-app`), and leaves Hermes alone. Running it again with a newer `hq-app.tgz` upgrades the app and keeps its settings and data.
 4. Give the main agent the app's tools: `python3 /opt/hq/app/scripts/add-hq-to-hermes.py`. It adds one `mcp_servers.hq` entry to Hermes' `config.yaml`, keeps a dated copy of the file, and Hermes picks the change up without a restart. `--remove` takes it out again.
-5. Open the public URL and sign in with Google. If Google sign-in is not set up yet, `bash /opt/hq/app/scripts/sign-in-link.sh you@example.com` on the computer prints a one-time sign-in link.
+5. Open the public URL and sign in with your staff account (WorkOS AuthKit). Nobody signs in until `ALLOWED_EMAILS` or `ALLOWED_EMAIL_DOMAINS` lists them: both empty means the allowlist admits nobody. If AuthKit is not set up, `bash /opt/hq/app/scripts/sign-in-link.sh you@example.com` on the computer prints a one-time sign-in link. In the WorkOS dashboard, also disable sign-up and restrict sign-in to the staff email domain.
 
 <details>
 <summary><b>Remove everything</b></summary>
@@ -162,7 +162,9 @@ npm run dev -w server     # API on :8787
 npm run dev -w web        # app on :5173
 ```
 
-With `HQ_LOCAL=0` the server reaches the computer through the Orgo API instead of running commands on it, which is enough for development. `DEV_LOGIN=1` enables the email-only sign-in form; never set it on a public address. It defaults to `0`.
+With `HQ_LOCAL=0` the server reaches the computer through the Orgo API instead of running commands on it, which is enough for development. `DEV_LOGIN=1` enables the email-only sign-in form; never set it on a public address. It defaults to `0`, and the server refuses it anyway when the process looks deployed or the address is not allowlisted.
+
+This app is internal: artists and management sign in, fans do not. A signed-in session reaches tools that read and write the host (`shell`, `computer_*`, the file tools), so the staff allowlist fails closed — `ALLOWED_EMAILS` and `ALLOWED_EMAIL_DOMAINS` both empty means nobody can sign in. Fans belong in the game / `antinrml.com`, which has its own Google OAuth.
 
 `npm run build && npm start` serves the built app from the API port.
 
@@ -171,8 +173,8 @@ The keys you need:
 | Key | Used for |
 |---|---|
 | `ORGO_API_KEY`, `ORGO_COMPUTER_ID` | The shared computer and its screens (`DESKTOP_MODE=orgo` or `HQ_LOCAL=1` only; the default `docker` mode needs neither) |
-| `COMPOSIO_API_KEY` | Connected apps; Google sign-in when `AUTH_PROVIDER=composio` |
-| `WORKOS_API_KEY`, `WORKOS_CLIENT_ID` | Sign-in with WorkOS AuthKit (the default flow when both are set) |
+| `COMPOSIO_API_KEY` | Connected apps (no sign-in: the fan-facing Google flow is not part of this app) |
+| `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `ALLOWED_EMAILS` / `ALLOWED_EMAIL_DOMAINS` | Staff sign-in: WorkOS AuthKit plus the allowlist that walls it. Both lists empty = nobody signs in |
 | `LLM_*`, `IMAGE_*`, `TTS_*`, `STT_*`, `REALTIME_*` | Model, image, speech and realtime endpoints, each optional (see below) |
 | `XAI_API_KEY` | The `LLM_API_KEY` fallback when `LLM_*` is unset (legacy name) |
 | `SEARCH_BASE_URL`, `SEARCH_API_KEY` | The local `web_search` tool; unset hides the tool |
