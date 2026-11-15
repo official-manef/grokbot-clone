@@ -227,9 +227,6 @@ export function parseResults(json: any): { title: string; url: string; snippet: 
   return out;
 }
 
-/** Where each bot's Library lives on the shared computer, when no backend answers. */
-export const LIBRARY_ROOT = '/root/grokbot/files';
-
 /**
  * What `shell` actually runs as, per backend. The default is a Docker box where
  * a bot is the unprivileged `bot` user; only the shared-computer shape runs as
