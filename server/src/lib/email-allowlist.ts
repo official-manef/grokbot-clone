@@ -22,6 +22,14 @@
  * Pure and signature-stable on purpose: every sign-in route calls this same
  * predicate, so there is one rule and no path around it.
  */
+
+/**
+ * Who a signed-in person is to us. This app only admits staff, so in practice
+ * everything that reaches a turn is `staff`. `fan` stays defined (and its numbers
+ * stay conservative in lib/usage-quota.ts) because the game and antinrml.com will
+ * reuse this module for the people who sign in there.
+ */
+export type Audience = 'staff' | 'fan';
 export function isEmailAllowed(
   email: string,
   lists: { allowedEmails: string[]; allowedEmailDomains: string[] },

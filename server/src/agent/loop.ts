@@ -6,6 +6,9 @@ import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
 import { toolkitInfo } from '../composio.js';
 import { screenForWork } from '../computer.js';
 import { engineFor } from '../engine.js';
+import { env } from '../env.js';
+import { isEmailAllowed, type Audience } from '../lib/email-allowlist.js';
+import { bumpUsage, checkQuota, type QuotaReason } from '../lib/usage-quota.js';
 import { instructionsFor } from './prompt.js';
 import { activityFor, appToolName, humanizeSlug, policyFor } from './tools.js';
 
@@ -299,8 +302,34 @@ function captionFrom(reasoning: string): string | null {
 
 // ---------- the turn ----------
 
+/**
+ * What a user sees when their daily budget is gone. It names which wall they hit, so
+ * the message is actionable rather than a silent stop, and carries no number about
+ * the account beyond the limit itself.
+ */
+function quotaNotice(reason: QuotaReason): string {
+  if (reason === 'unavailable') {
+    return `I couldn't check today's usage for this account, so I've stopped rather than risk spending past the limit. Please try again in a moment.`;
+  }
+  const what = reason === 'requests' ? 'message limit' : 'usage limit';
+  return `I've reached today's ${what} for this account, so I can't answer any more right now. It resets at midnight UTC.`;
+}
+
 /** Hermes' own tool lookup (it loads rarely used tools on demand). */
 const TOOLBOX = new Set(['tool_search', 'tool_describe']);
+
+/**
+ * Who this user is to the budget. Sign-in is staff-only, so the answer is normally
+ * `staff`; an address that is no longer on the allowlist (a live session from before
+ * the list tightened) gets the tight fan wall rather than the loose one. Same
+ * predicate as every sign-in route, so there is no second opinion to drift.
+ */
+function audienceFor(userId: string): { audience: Audience; role: string | null } {
+  const user = db.prepare('SELECT email FROM users WHERE id=?').get(userId) as any;
+  const email = String(user?.email ?? '');
+  const staff = isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains });
+  return { audience: staff ? 'staff' : 'fan', role: null };
+}
 
 async function runTurn(botId: string, trigger: Trigger) {
   const bot = getBotRow(botId);
@@ -351,8 +380,29 @@ async function runTurn(botId: string, trigger: Trigger) {
   const outputsSeen = new Set<string>();
   let steps = 0;
   let failed = false;
+  /** What the engine said it spent; recorded after the turn, never guessed. */
+  let usage: { input_tokens?: number; output_tokens?: number } | null = null;
 
   try {
+    // The daily wall sits before everything that spends: a denied turn never reaches
+    // the engine, and never screens a desktop for work that cannot happen. Nothing
+    // below may run on an allow it did not grant, so an unreadable ledger denies.
+    let blocked: QuotaReason | null = null;
+    try {
+      const { audience, role } = audienceFor(userId);
+      const q = checkQuota(db, userId, audience, role);
+      if (!q.allowed) blocked = q.reason ?? 'unavailable';
+    } catch (e: any) {
+      // Fail closed: we cannot know the spend, so we do not allow more of it.
+      console.warn(`[agent] quota check failed for ${botId}: ${e?.message ?? e}`);
+      blocked = 'unavailable';
+    }
+    if (blocked) {
+      console.warn(`[agent] daily quota refused a turn for ${bot.name} (${blocked})`);
+      say(quotaNotice(blocked));
+      return;
+    }
+
     // The screen first: the engine's browser and computer tools point at it.
     await screenForWork(userId, botId).catch((e) => console.warn(`[computer] screen not ready for ${botId}: ${e?.message ?? e}`));
     const engine = await engineFor(botId);
@@ -467,6 +517,12 @@ async function runTurn(botId: string, trigger: Trigger) {
           throw new Error(d?.response?.error?.message ?? d?.error?.message ?? d?.message ?? 'the agent run failed');
       }
 
+      // The engine reports what the finished response cost. Captured here, recorded
+      // after the stream ends, so a turn that dies half way is not billed as one.
+      if ((ev.type === 'response.completed' || ev.type === 'response.incomplete') && d?.response?.usage) {
+        usage = d.response.usage;
+      }
+
       // A tool result arrives as an item of its own (announced twice: added and done).
       const item = d?.item;
       if (item?.type === 'function_call_output' && item.call_id && !outputsSeen.has(item.call_id)) {
@@ -480,6 +536,14 @@ async function runTurn(botId: string, trigger: Trigger) {
           if (!getLive(botId).awaiting) setLive(botId, { activity: { kind: 'thinking', since: now() } });
         }
       }
+    }
+
+    // Record the spend for the daily wall, once the stream is over. Non-fatal: a
+    // ledger write failure must not turn a delivered answer into an error.
+    try {
+      bumpUsage(db, userId, { inputTokens: usage?.input_tokens ?? 0, outputTokens: usage?.output_tokens ?? 0 });
+    } catch (e: any) {
+      console.warn(`[agent] usage write failed for ${botId}: ${e?.message ?? e}`);
     }
   } catch (e: any) {
     failed = true;
