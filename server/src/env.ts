@@ -68,6 +68,10 @@ const desktopMode = (process.env.DESKTOP_MODE?.trim() || (process.env.HQ_LOCAL =
   | 'mso';
 const composioKey = alias('COMPOSIO_API_KEY', 'COMPOSIO_API_KEY') ?? '';
 
+/** A raw optional string from the environment, trimmed to ''. */
+const opt = (name: string) => process.env[name]?.trim() ?? '';
+
+
 const hermesHome = process.env.HERMES_HOME_PRIMARY ?? path.join(os.homedir(), '.hermes');
 
 /**
@@ -85,6 +89,25 @@ const sessionSecret = (() => {
   console.warn('[env] SESSION_SECRET is unset: using a random per-process secret. Owner sign-in links and agent MCP tokens will not survive a restart. Set SESSION_SECRET to keep them.');
   return generated;
 })();
+
+/**
+ * Which sign-in flow `/auth/google/start` runs.
+ *  - `workos`   (default when configured): WorkOS AuthKit.
+ *  - `composio`: the older Composio-managed Google (Gmail) connection, kept for back-compat.
+ * With no AUTH_PROVIDER set, WorkOS wins as soon as both of its vars are present.
+ */
+export type AuthProvider = 'workos' | 'composio';
+const workosApiKey = opt('WORKOS_API_KEY');
+const workosClientId = opt('WORKOS_CLIENT_ID');
+const authProviderRaw = opt('AUTH_PROVIDER').toLowerCase();
+if (authProviderRaw && authProviderRaw !== 'workos' && authProviderRaw !== 'composio') {
+  throw new Error(`AUTH_PROVIDER must be "workos" or "composio" (got "${authProviderRaw}")`);
+}
+const authProvider: AuthProvider = authProviderRaw
+  ? (authProviderRaw as AuthProvider)
+  : workosApiKey && workosClientId
+    ? 'workos'
+    : 'composio';
 
 export const env = {
   port: Number(process.env.PORT ?? 8787),
@@ -183,6 +206,26 @@ export const env = {
   allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   /** Comma-separated email domains allowed to sign in (a leading '@' is dropped); empty = no domain rule. */
   allowedEmailDomains: (process.env.ALLOWED_EMAIL_DOMAINS ?? '').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
+
+  /**
+   * Composio powers app connections and, with AUTH_PROVIDER=composio, the legacy
+   * Google sign-in. Already resolved above as `composioKey`.
+   */
+  get composioEnabled(): boolean {
+    return composioKey.length > 0;
+  },
+
+  // ---- sign-in (WorkOS AuthKit) ----
+  /**
+   * Exposed here so boot-time validation and `authProvider` agree with what
+   * `lib/workos.ts` reads; that module reads `process.env` lazily (same values) so it
+   * stays import-free for `node --test`.
+   */
+  /** WorkOS secret key (`sk_...`). Server-side only; never sent to the browser or logged. */
+  workosApiKey,
+  /** WorkOS client id (`client_...`). Public, but only the server builds the URL. */
+  workosClientId,
+  authProvider,
 
   /** Kept for the orgo mode only, so the old path still compiles while it exists. */
   orgo: {
