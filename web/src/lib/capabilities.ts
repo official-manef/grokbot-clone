@@ -82,7 +82,7 @@ export function gapReason(name: Capability): string {
     case 'image': return 'Image generation needs an image endpoint (IMAGE_BASE_URL, IMAGE_API_KEY, IMAGE_MODEL).';
     case 'desktop': return 'Bot desktops need DESKTOP_MODE=docker (or orgo) plus a running daemon.';
     case 'integrations': return 'App connections need COMPOSIO_API_KEY.';
-    case 'signin': return 'Google sign-in needs COMPOSIO_API_KEY. Use the email form when DEV_LOGIN=1.';
+    case 'signin': return 'Staff sign-in needs WORKOS_API_KEY, WORKOS_CLIENT_ID and a non-empty ALLOWED_EMAILS or ALLOWED_EMAIL_DOMAINS. This app is internal: fans sign in to the game or antinrml.com.';
     case 'llm': return 'The model endpoint is not configured (LLM_BASE_URL, LLM_API_KEY, LLM_MODEL).';
     default: return '';
   }

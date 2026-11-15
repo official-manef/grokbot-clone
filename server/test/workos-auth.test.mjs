@@ -172,7 +172,12 @@ test('with nothing configured, /auth/google/start answers 503 rather than 500', 
 });
 
 test('with WorkOS configured, /auth/google/start redirects to AuthKit with a live state', async () => {
-  const r = await startRoute({ mode: 'workos', env: { WORKOS_API_KEY: KEY, WORKOS_CLIENT_ID: CLIENT, SERVER_URL: 'https://grok.antinrml.com' } });
+  // The allowlist is now half of "sign-in configured": with it empty, the route
+  // refuses before redirecting (asserted below). This case is staff transport.
+  const r = await startRoute({
+    mode: 'workos',
+    env: { WORKOS_API_KEY: KEY, WORKOS_CLIENT_ID: CLIENT, SERVER_URL: 'https://grok.antinrml.com', ALLOWED_EMAIL_DOMAINS: 'antinrml.com' },
+  });
   assert.equal(r.authProvider, 'workos', 'WorkOS is the default once both vars are present');
   assert.equal(r.status, 302);
   const url = new URL(r.location);
@@ -185,4 +190,16 @@ test('with WorkOS configured, /auth/google/start redirects to AuthKit with a liv
   assert.match(r.state, /^state_[A-Za-z0-9_-]{12,}$/, 'state is an unguessable random token, not a counter');
   assert.equal(r.stateIsLive, true, 'state is a live login_attempts row');
   assert.ok(!r.location.includes(KEY), 'the secret key never leaves the server');
+});
+
+test('with WorkOS configured but an empty allowlist, /auth/google/start refuses before Google', async () => {
+  // Fail closed: no allowlist entry means nobody can be admitted, so sending a
+  // browser to the identity provider would only advertise a sign-up that can never
+  // finish. Updated from the old expectation, which redirected regardless.
+  const r = await startRoute({ mode: 'workos', env: { WORKOS_API_KEY: KEY, WORKOS_CLIENT_ID: CLIENT, SERVER_URL: 'https://grok.antinrml.com' } });
+  assert.equal(r.status, 302);
+  assert.match(r.location, /login=refused/, 'the plain "for the AntiNRML team" landing');
+  assert.ok(!r.location.includes('workos.com'), 'nobody is sent to the identity provider');
+  assert.equal(r.state, '');
+  assert.equal(r.stateIsLive, false, 'no login attempt row is written either');
 });

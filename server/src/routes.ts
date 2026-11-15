@@ -11,6 +11,7 @@ import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieH
 import { checkPassword, passwordAuth } from './lib/password.js';
 import { CapabilityError } from './lib/capability-error.js';
 import { isEmailAllowed } from './lib/email-allowlist.js';
+import { devLoginAllowed } from './lib/dev-login-guard.js';
 import { clientKey, rateLimited, rateLimitedUntrusted, retryAfterSeconds } from './lib/rate-limit.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
@@ -18,8 +19,8 @@ import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComp
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
 import { orgo } from './orgo.js';
-import { box } from './box.js';
-import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin, toolkitInfo } from './composio.js';
+import { box, libraryDirFor } from './box.js';
+import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, toolkitInfo } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
@@ -111,13 +112,37 @@ function createBot(userId: string, b: { name: string; label?: string; descriptio
   return getBot(id)!;
 }
 
+/**
+ * The staff wall. This app is internal: a session here reaches tools that read and
+ * write the host (`shell`, `computer_*`, the file tools), so a fan must never hold
+ * one — "chat only" is not a boundary you can draw over a session that can also
+ * `rm` the box. Fans belong in the game / antinrml.com, which uses Google OAuth.
+ *
+ * Every entry point calls `isStaffEmail` BEFORE anything is written, so a refusal
+ * has no side effects: no user row, no Bot, no session. One predicate, one rule.
+ */
+const isStaffEmail = (email: string) =>
+  isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains });
+
+/**
+ * What a refused person is told. Deliberately says nothing about which list
+ * refused, whether the address exists, or that an allowlist exists at all.
+ */
+const REFUSED = 'This app is for the AntiNRML team.';
+
+/** One log line per refusal: which path refused, never the address or a secret. */
+function logRefusal(path: string) {
+  console.warn(`[auth] refused sign-in via ${path}: address is not on the staff allowlist`);
+}
+
 function findOrCreateUser(email: string, name?: string, preferId?: string) {
-  // The allow-list is checked before the lookup, not after it. An account created
-  // while the list was empty must stop working once the list is set, or the list
-  // only ever gates new arrivals. The predicate and its four empty/non-empty cases
-  // live in lib/email-allowlist.ts; the refusal is deliberately identical for an
-  // email and a domain rejection so it says nothing about which list refused.
-  if (!isEmailAllowed(email, { allowedEmails: env.allowedEmails, allowedEmailDomains: env.allowedEmailDomains })) throw new UserError('This account is not allowed to sign in here.');
+  // The allow-list is checked before the lookup, not after it, and again here even
+  // though every route checks first: this function is the only thing that inserts,
+  // so its own gate is what makes "refused means no row" true no matter who calls
+  // it. An account created while the list was empty must stop working once the
+  // list is set, or the list would only ever gate new arrivals. The predicate and
+  // its four cases live in lib/email-allowlist.ts.
+  if (!isStaffEmail(email)) throw new UserError(REFUSED);
   const existing = db.prepare('SELECT * FROM users WHERE lower(email)=lower(?)').get(email) as any;
   if (existing) return { id: existing.id as string, isNew: false };
   const id = preferId ?? newId('usr');
@@ -144,6 +169,8 @@ api.get('/auth/me', async (c) => {
 const LOGIN_ATTEMPT_TTL_MS = 10 * 60_000;
 const workosCallbackUrl = () => `${env.serverUrl}/api/auth/workos/callback`;
 const loginFailed = (c: Context<AuthVars>) => c.redirect(`${env.appUrl}/?login=failed`);
+/** Same landing page, different flag: the person was signed in fine, just not staff. */
+const loginRefused = (c: Context<AuthVars>) => c.redirect(`${env.appUrl}/?login=refused`);
 
 /**
  * Sign-in being unconfigured is a deployment state, not a crash: answer 503 with a
@@ -154,33 +181,53 @@ let unconfiguredLogged = false;
 function signInNotConfigured(c: Context<AuthVars>) {
   if (!unconfiguredLogged) {
     unconfiguredLogged = true;
-    console.warn(`[auth] sign-in not configured (AUTH_PROVIDER=${env.authProvider}); set WORKOS_API_KEY and WORKOS_CLIENT_ID`);
+    console.warn(`[auth] sign-in not configured (AUTH_PROVIDER=${env.authProvider}); set WORKOS_API_KEY and WORKOS_CLIENT_ID. The Composio Google sign-in is gone from this app: it is fan-facing, and Google OAuth belongs to the game and antinrml.com.`);
   }
   return c.json({ error: 'sign-in not configured' }, 503);
 }
 
-async function composioStart(c: Context<AuthVars>) {
-  if (!env.composioEnabled) return signInNotConfigured(c);
-  try {
-    const attemptId = newId('login');
-    const provisional = newId('usr');
-    const cb = `${env.serverUrl}/api/auth/google/callback?attempt=${attemptId}`;
-    const { redirectUrl, connectedAccountId } = await startGoogleLogin(provisional, cb);
-    db.prepare('INSERT INTO login_attempts(id,provisional_user_id,connected_account_id,created_at) VALUES (?,?,?,?)').run(attemptId, provisional, connectedAccountId ?? null, now());
-    return c.redirect(redirectUrl);
-  } catch (e: any) {
-    console.error('[auth] composio start', e?.message ?? e);
-    return c.json({ error: 'sign-in unavailable' }, 503);
-  }
-}
+/** True when the operator has listed anybody at all; an empty allowlist admits nobody. */
+const allowlistConfigured = () => env.allowedEmails.length > 0 || env.allowedEmailDomains.length > 0;
 
+/**
+ * Staff sign-in: WorkOS AuthKit with a non-empty allowlist.
+ *
+ * This path used to fork to Composio-managed Google, which is a fan-facing flow
+ * (any Google account could start it and land on a sign-up). Google OAuth belongs
+ * to the game and antinrml.com, so that fork is gone: this app only runs AuthKit,
+ * and AuthKit is walled by the allowlist. `/auth/google/callback` stays mounted
+ * because it is a public URL in the wild; it is inert without a live attempt row
+ * and it refuses a non-staff address before writing anything.
+ *
+ * The wall in code is necessary but not sufficient: AuthKit's hosted page is
+ * WorkOS's, and by default it offers a "Sign up" form. The operator must also, in
+ * the WorkOS dashboard (Authentication → AuthKit / User Management):
+ *   1. turn sign-up OFF (AuthKit → "Sign-up" / "Allow sign-ups" disabled), so the
+ *      hosted page only offers a sign-in form; and
+ *   2. enable email-domain restriction for the staff domain(s)
+ *      (Authentication → "Email domains" / organization domain verification),
+ *      matching ALLOWED_EMAIL_DOMAINS, so a stranger's address is rejected before
+ *      it ever comes back here.
+ * Only then does the hosted page stop advertising registration. This server does
+ * not call the WorkOS API: the switch is the operator's.
+ *
+ * Even with both set, this server creates a user row only after an allowlisted
+ * address finishes a code exchange (see the callback below), so a stranger who
+ * somehow got an AuthKit session still gets no row, no Bot and no session here.
+ */
 api.get('/auth/google/start', async (c) => {
   // The start route writes a login_attempts row on every call, so it needs the
   // same ceiling as the rest of sign-in.
   const limited = withinIpLimit(c, 'signInStart');
   if (limited) return limited;
-  if (env.authProvider === 'composio') return composioStart(c);
-  if (!workosConfigured()) return signInNotConfigured(c);
+  if (env.authProvider === 'composio' || !workosConfigured()) return signInNotConfigured(c);
+  // Fail closed *before* the redirect: with no allowlist entry there is nobody to
+  // admit, so sending a browser to the identity provider would only advertise a
+  // sign-up form that can never finish.
+  if (!allowlistConfigured()) {
+    logRefusal('GET /auth/google/start');
+    return loginRefused(c);
+  }
   try {
     const state = newId('state');
     // Opportunistic cleanup so abandoned attempts do not accumulate.
@@ -210,7 +257,13 @@ api.get('/auth/workos/callback', async (c) => {
   db.prepare('DELETE FROM login_attempts WHERE id=?').run(state);
   try {
     const profile = await exchangeCode(code);
-    // Re-classifies audience/role on every sign-in (see lib/email-allowlist.ts).
+    // The wall is checked on the profile, before any row or session exists, so a
+    // refused sign-in leaves the database exactly as it was.
+    if (!isStaffEmail(profile.email)) {
+      logRefusal('GET /auth/workos/callback');
+      return loginRefused(c);
+    }
+    // A row is created only now: allowlisted *and* a finished AuthKit exchange.
     const { id } = findOrCreateUser(profile.email, profile.name);
     createSession(c, id);
     return c.redirect(`${env.appUrl}/`);
@@ -228,6 +281,11 @@ api.get('/auth/google/callback', async (c) => {
   db.prepare('DELETE FROM login_attempts WHERE id=?').run(attempt.id);
   try {
     const profile = await googleProfile(caId);
+    // Staff wall, before any row, Bot or session: same rule as every other path.
+    if (!isStaffEmail(profile.email)) {
+      logRefusal('GET /auth/google/callback');
+      return loginRefused(c);
+    }
     const { id, isNew } = findOrCreateUser(profile.email, profile.name, attempt.provisional_user_id);
     // Existing user: the Gmail connection made for sign-in belongs to a throwaway id; remove it.
     if (!isNew && id !== attempt.provisional_user_id) await deleteConnection(caId);
@@ -252,10 +310,13 @@ const passwordAttempts = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 5;
 const ATTEMPT_WINDOW_MS = 15 * 60_000;
 
-function attemptKey(c: any): string {
-  const forwarded = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || c.req.header('cf-connecting-ip') || 'local';
+// Same identity rule as the rest of the limiter: the trusted hop from the end of
+// the chain, never the first (a caller can write the first one). MAX_ATTEMPT_KEYS
+// bounds this map so a rotating address cannot grow it without limit.
+function attemptKey(c: Context<AuthVars>): string {
+  return clientKey(c.req.raw.headers, remoteAddress(c));
 }
+const MAX_ATTEMPT_KEYS = 4096;
 
 api.post('/auth/password', async (c) => {
   const auth = await passwordAuth();
@@ -274,9 +335,26 @@ api.post('/auth/password', async (c) => {
   const password = typeof body.password === 'string' ? body.password : '';
   if (!email.includes('@') || !password) return c.json({ error: 'email and password are required' }, 400);
 
+  // Staff check first, before `checkPassword`: a refused address must not even be
+  // an offline guessing oracle, and it must not learn that the password was right.
+  // Same body as a wrong password, so the refusal says nothing about the address.
+  if (!isStaffEmail(email)) {
+    logRefusal('POST /auth/password');
+    return c.json({ error: REFUSED }, 403);
+  }
+
   const ok = await checkPassword(password);
   if (!ok) {
     const next = rec && rec.resetAt > now_ ? { count: rec.count + 1, resetAt: rec.resetAt } : { count: 1, resetAt: now_ + ATTEMPT_WINDOW_MS };
+    if (passwordAttempts.size >= MAX_ATTEMPT_KEYS && !passwordAttempts.has(key)) {
+      // Reclaim expired entries first; only then drop the coldest live one.
+      for (const [k, v] of passwordAttempts) if (v.resetAt <= now_) passwordAttempts.delete(k);
+      while (passwordAttempts.size >= MAX_ATTEMPT_KEYS) {
+        const oldest = passwordAttempts.keys().next();
+        if (oldest.done) break;
+        passwordAttempts.delete(oldest.value);
+      }
+    }
     passwordAttempts.set(key, next);
     console.warn(`[auth] failed password attempt for ${email} from ${key} (${next.count}/${MAX_ATTEMPTS})`);
     // Same message either way: never say whether the address exists.
@@ -293,11 +371,25 @@ api.post('/auth/password', async (c) => {
 });
 
 api.post('/auth/dev', async (c) => {
-  if (!env.devLogin) return c.json({ error: 'disabled' }, 403);
   const limited = withinIpLimit(c, 'dev');
   if (limited) return limited;
-  const { email, name } = await c.req.json<{ email: string; name?: string }>();
+  const { email, name } = await c.req.json<{ email: string; name?: string }>().catch(() => ({} as any));
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
+  // One pure decision (lib/dev-login-guard.ts): flag, production signal, loopback
+  // peer, and the same staff allowlist every other path uses. Credential-less
+  // sign-in must never be a way around the wall.
+  const verdict = devLoginAllowed({
+    flag: env.devLogin,
+    production: env.production,
+    forwardedFor: c.req.header('x-forwarded-for') ?? null,
+    staff: isStaffEmail(email),
+  });
+  if (!verdict.allowed) {
+    if (verdict.reason === 'not-staff') logRefusal('POST /auth/dev');
+    // Plain, and the same word for every other gate: the reason is the operator's
+    // business, not the caller's.
+    return c.json({ error: verdict.reason === 'not-staff' ? REFUSED : 'disabled' }, 403);
+  }
   try {
     const { id } = findOrCreateUser(email, name);
     createSession(c, id);
@@ -316,8 +408,15 @@ api.post('/auth/owner', async (c) => {
   if (!isOwnerKey((c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, ''))) return c.json({ error: 'forbidden' }, 403);
   const limited = withinIpLimit(c, 'owner');
   if (limited) return limited;
-  const { email, name, link } = await c.req.json<{ email: string; name?: string; link?: boolean }>();
+  const { email, name, link } = await c.req.json<{ email: string; name?: string; link?: boolean }>().catch(() => ({} as any));
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
+  // The key logic above is untouched: this is still the one route for whoever runs
+  // the server. But the key must not buy a session the allowlist refuses, or the
+  // owner shortcut becomes a way to mint a host-capable session for any address.
+  if (!isStaffEmail(email)) {
+    logRefusal('POST /auth/owner');
+    return c.json({ error: REFUSED }, 403);
+  }
   try {
     const { id } = findOrCreateUser(email, name);
     if (link) {
@@ -622,6 +721,20 @@ api.get('/bots/:id/screenshot', async (c) => {
     // own container, and env.orgoComputerId is empty.
     const comp = db.prepare('SELECT orgo_id FROM computers WHERE user_id=?').get(user.id) as any;
     if (!comp?.orgo_id) return c.body(null, 204);
+
+    // `?seq=<name>` is the file `computer_screenshot` saved when the model took the
+    // picture. Serving it back is the point: a live capture shows the screen now, not
+    // what the bot was answering about. Anything that is not one of those names is not
+    // a file this route will read, so the path stays inside the bot's own library.
+    const seq = c.req.query('seq') ?? '';
+    const saved = /^screen-\d+\.png$/.test(seq) ? seq : null;
+    if (saved && (env.desktop.mode === 'docker' || env.desktop.mode === 'mso')) {
+      try {
+        const bytes = await box.computer.readFile(comp.orgo_id, `${libraryDirFor(b.id)}/${saved}`);
+        return c.body(new Uint8Array(bytes), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+      } catch { /* not saved yet (the write is best-effort): fall through to a live capture */ }
+    }
+
     const s = await box.computer.screenshot(comp.orgo_id, scr.screen_id);
     const b64 = s.image.replace(/^data:[^,]+,/, '');
     return c.body(Buffer.from(b64, 'base64'), 200, { 'Content-Type': s.mime_type ?? 'image/jpeg', 'Cache-Control': 'no-store' });
