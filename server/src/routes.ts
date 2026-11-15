@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { streamSSE } from 'hono/streaming';
 import { db, now } from './db.js';
 import { env } from './env.js';
@@ -8,6 +9,7 @@ import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { CapabilityError } from './lib/capability-error.js';
 import { isEmailAllowed } from './lib/email-allowlist.js';
+import { clientKey, hit } from './lib/rate-limit.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
@@ -35,6 +37,34 @@ function hashPick<T>(id: string, list: T[]): T {
 
 /** Thrown for things the user can fix; the message is shown to them. */
 class UserError extends Error {}
+
+/**
+ * A ceiling on the endpoints that run before a session exists. Each bucket is
+ * per client, so one noisy address cannot lock everyone else out.
+ */
+const LIMITS = {
+  // Sign in: a human types an email a few times at most, a script types thousands.
+  dev: { limit: 10, windowMs: 5 * 60_000 },
+  owner: { limit: 10, windowMs: 5 * 60_000 },
+  signInStart: { limit: 20, windowMs: 5 * 60_000 },
+  // A used link is deleted, so this only bounds guessing.
+  link: { limit: 20, windowMs: 5 * 60_000 },
+} as const;
+
+/**
+ * Count the call and answer `429` with `Retry-After` when the bucket is full.
+ * `getConnInfo` reads the socket; a proxy in front makes that the proxy, which
+ * is why the header is preferred (see `clientKey`).
+ */
+async function withinLimit(c: Context<AuthVars>, bucket: keyof typeof LIMITS): Promise<Response | null> {
+  const { limit, windowMs } = LIMITS[bucket];
+  let remote: string | undefined;
+  try { remote = getConnInfo(c).remote.address; } catch { /* no node bindings, e.g. a test harness */ }
+  const r = hit(bucket, clientKey(c.req.raw.headers, remote), limit, windowMs);
+  if (r.ok) return null;
+  c.header('Retry-After', String(r.retryAfter));
+  return c.json({ error: 'too many attempts, try again later' }, 429);
+}
 
 const agentCount = (userId: string) => (db.prepare("SELECT COUNT(*) n FROM bots WHERE user_id=? AND COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0").get(userId) as any).n as number;
 
@@ -106,6 +136,8 @@ api.get('/auth/google/callback', async (c) => {
 
 api.post('/auth/dev', async (c) => {
   if (!env.devLogin) return c.json({ error: 'disabled' }, 403);
+  const limited = await withinLimit(c, 'dev');
+  if (limited) return limited;
   const { email, name } = await c.req.json<{ email: string; name?: string }>();
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
   try {
@@ -124,6 +156,8 @@ const signInLinks = new Map<string, { userId: string; expires: number }>();
 // With `link`, it answers with a link that signs one browser in, once (scripts/sign-in-link.sh).
 api.post('/auth/owner', async (c) => {
   if (!isOwnerKey((c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, ''))) return c.json({ error: 'forbidden' }, 403);
+  const limited = await withinLimit(c, 'owner');
+  if (limited) return limited;
   const { email, name, link } = await c.req.json<{ email: string; name?: string; link?: boolean }>();
   if (!email?.includes('@')) return c.json({ error: 'email required' }, 400);
   try {
@@ -140,9 +174,12 @@ api.post('/auth/owner', async (c) => {
   }
 });
 
-api.get('/auth/link/:token', (c) => {
+api.get('/auth/link/:token', async (c) => {
+  const limited = await withinLimit(c, 'link');
+  if (limited) return limited;
   const token = c.req.param('token');
   const l = signInLinks.get(token);
+  // Deleted before it is validated, so a link works once even if a second request races it.
   signInLinks.delete(token);
   if (!l || l.expires < Date.now()) return c.text('This sign-in link was already used or has expired. Ask for a new one.', 410);
   createSession(c, l.userId);

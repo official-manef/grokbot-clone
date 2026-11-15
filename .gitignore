@@ -21,3 +21,7 @@ server/vendor/
 
 # Per-bot desktops: browser profiles, cookies, saved files.
 .grokbot/
+
+# Large local test fixture: the voice test plays this file through a fake mic.
+# Regenerate with: ffmpeg -i tests/ask-weather.wav -ac 1 -c:a flac tests/ask-weather.flac
+tests/*.wav

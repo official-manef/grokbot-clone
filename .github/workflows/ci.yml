@@ -1,0 +1,27 @@
+name: CI
+
+# The two checks that catch every regression this repo has actually had: a type
+# that stopped compiling after a backend swap, and a capability contract that
+# drifted from the code. Both run without a model key, a Docker daemon or Hermes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

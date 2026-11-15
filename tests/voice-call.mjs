@@ -1,12 +1,26 @@
-// Two-way voice call test: headless Chrome with a fake mic playing tests/ask-weather.wav.
+// Two-way voice call test: headless Chrome with a fake mic playing a spoken prompt.
 // Usage: node tests/voice-call.mjs <outDir> <throwawayBotId>   (changes that bot's voice settings)
+//
+// Chrome's --use-file-for-fake-audio-capture wants a 16-bit PCM wav, so the repo
+// carries tests/ask-weather.flac (small, diffable) and you build the wav once:
+//   ffmpeg -y -i tests/ask-weather.flac -ac 1 -c:a pcm_s16le "$S/ask-fixed.wav"
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 const require = createRequire(new URL('../package.json', import.meta.url));
 const { chromium } = require('playwright');
 const S = process.argv[2]; const BOT = process.argv[3]; const BASE = 'http://localhost:8787';
 const t0 = Date.now(); const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
+// Chrome only takes 16-bit PCM wav; the repo keeps the prompt as flac (10x smaller).
+const MIC = `${S}/ask-fixed.wav`;
+if (!existsSync(MIC)) {
+  const flac = fileURLToPath(new URL('./ask-weather.flac', import.meta.url));
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', flac, '-ac', '1', '-c:a', 'pcm_s16le', MIC]);
+  log('built fake mic input from', flac);
+}
 const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: [
-  '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${S}/ask-fixed.wav`, '--autoplay-policy=no-user-gesture-required'] });
+  '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${MIC}`, '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['microphone'] });
 await ctx.addInitScript((bot) => {
   localStorage.setItem('grokbot.selectedBot', bot); localStorage.setItem('grokbot.detailsOpen', '1');

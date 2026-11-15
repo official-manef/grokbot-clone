@@ -14,6 +14,7 @@
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "test": "node --import tsx --test server/test/*.test.mjs",
     "setup": "node bin/gb init",
     "doctor": "node bin/gb doctor"
   },

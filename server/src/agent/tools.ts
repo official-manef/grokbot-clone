@@ -227,8 +227,24 @@ export function parseResults(json: any): { title: string; url: string; snippet: 
   return out;
 }
 
-/** Where each bot's Library lives on the shared computer. */
+/** Where each bot's Library lives on the shared computer, when no backend answers. */
 export const LIBRARY_ROOT = '/root/grokbot/files';
+
+/**
+ * What `shell` actually runs as, per backend. The default is a Docker box where
+ * a bot is the unprivileged `bot` user; only the shared-computer shape runs as
+ * root. A description that says "root" everywhere teaches the model it may
+ * install packages and edit system files it cannot touch.
+ */
+function shellDescription(): string {
+  const where =
+    env.desktop.mode === 'docker'
+      ? 'as the unprivileged `bot` user inside your own container'
+      : env.desktop.mode === 'mso'
+        ? 'as the account that runs the app on this host (no container in between)'
+        : 'as root on the shared computer your team uses';
+  return `Run a bash command on your own Linux computer, ${where}. Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.`;
+}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -349,7 +365,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'shell',
-    description: 'Run a bash command on your own Linux computer (as root). Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
+    description: shellDescription(),
     parameters: obj({ command: { type: 'string' }, timeout_seconds: { type: 'integer' } }, ['command']),
     activity: 'running_commands',
     label: 'Running commands',

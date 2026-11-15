@@ -5,6 +5,7 @@ import { composioTools } from './composio.js';
 import { mcpToken, primaryBotId } from './engine.js';
 import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, requestApproval, turnDepth } from './agent/loop.js';
 import { availableTools, policyFor, runComposioTool, toolMap, type ToolCtx } from './agent/tools.js';
+import { hit } from './lib/rate-limit.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -134,9 +135,23 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
 
 export const mcpApi = new Hono();
 
+/**
+ * A ceiling per bot, not per address: every engine on this host shares one
+ * address, so an IP bucket would let one busy bot starve the rest. The token is
+ * already an HMAC of SESSION_SECRET, so this only bounds a leaked one.
+ */
+const MCP_LIMIT = 600;
+const MCP_WINDOW_MS = 60_000;
+
 mcpApi.post('/:bot', async (c) => {
-  const who = caller(c.req.param('bot'), c.req.header('authorization'));
+  const slug = c.req.param('bot');
+  const who = caller(slug, c.req.header('authorization'));
   if (!who) return c.json(rpcError(null, -32001, 'Unauthorized'), 401);
+  const r = hit('mcp', slug, MCP_LIMIT, MCP_WINDOW_MS);
+  if (!r.ok) {
+    c.header('Retry-After', String(r.retryAfter));
+    return c.json(rpcError(null, -32000, 'Too many tool calls; slow down.'), 429);
+  }
   let body: any;
   try { body = await c.req.json(); } catch { return c.json(rpcError(null, -32700, 'Parse error'), 400); }
   if (Array.isArray(body)) {
