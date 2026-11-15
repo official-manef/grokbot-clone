@@ -9,6 +9,7 @@ import { hub } from './lib/hub.js';
 import { classifyEmail, isSignableEmail } from './lib/email-allowlist.js';
 import { isStaffOnlyPath, staffOnlyRefusal } from './lib/staff-gate.js';
 import { devLoginAllowed } from './lib/dev-login-guard.js';
+import { rateLimited, rateLimitedUntrusted, retryAfterSeconds } from './lib/rate-limit.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
@@ -22,6 +23,39 @@ import { voiceApi } from './voice.js';
 import type { AvatarColor, AvatarShape, Toolkit } from './types.js';
 
 export const api = new Hono<AuthVars>();
+
+// ---------- rate limits ----------
+//
+// Provisional values, not a capacity plan: they stop one account or one unauthenticated
+// flood from draining the model key. Rahman sets the real numbers.
+//
+// `user:` pool — a signed-in user's own budget. 60 turns per minute is far above a
+// human typing and far below a script.
+const USER_LIMIT = 60;
+const USER_WINDOW_MS = 60_000;
+// Cheap, abusable owner actions (interrupt/fresh/dev login) share the pool but get a
+// tighter budget than a turn.
+const ACTION_LIMIT = 20;
+const ACTION_WINDOW_MS = 60_000;
+// `ip:` pool — pre-auth sign-in paths. A person signs in a handful of times a minute at
+// most; a flood gets 10 per IP per minute and nothing else.
+const AUTH_IP_LIMIT = 10;
+const AUTH_IP_WINDOW_MS = 60_000;
+
+/**
+ * One 429 body for every limited path. Deliberately says nothing about the key, the
+ * limit or the pool: the only useful fact to the caller is "wait".
+ */
+function tooMany(c: Context<AuthVars>, key: string) {
+  const retry = retryAfterSeconds(key);
+  return c.json({ error: 'too many requests' }, 429, { 'Retry-After': String(retry) });
+}
+
+/** The first hop of `x-forwarded-for` is the original client; Traefik appends the rest. */
+function clientIp(c: Context<AuthVars>): string {
+  const first = (c.req.header('x-forwarded-for') ?? '').split(',')[0].trim();
+  return first || c.req.header('x-real-ip') || 'unknown';
+}
 
 const SHAPES: AvatarShape[] = ['blob', 'pebble', 'bean', 'egg', 'squircle', 'tablet', 'capsule', 'cylinder', 'hex', 'gem', 'crystal', 'wedge', 'shield', 'dome', 'arch', 'cloud', 'teardrop', 'leaf', 'square', 'sparkle', 'clover', 'flower', 'heart', 'house', 'star'];
 const COLORS: AvatarColor[] = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'];
@@ -125,6 +159,10 @@ async function composioStart(c: Context<AuthVars>) {
 }
 
 api.get('/auth/google/start', async (c) => {
+  const ipKey = `ip:${clientIp(c)}`;
+  // Pre-auth, so the untrusted pool: an unauthenticated flood must not be able to
+  // evict a signed-in user's `user:` bucket by minting fresh keys.
+  if (rateLimitedUntrusted(ipKey, AUTH_IP_LIMIT, AUTH_IP_WINDOW_MS)) return tooMany(c, ipKey);
   if (env.authProvider === 'composio') return composioStart(c);
   if (!workosConfigured()) return signInNotConfigured(c);
   try {
@@ -141,6 +179,8 @@ api.get('/auth/google/start', async (c) => {
 });
 
 api.get('/auth/workos/callback', async (c) => {
+  const ipKey = `ip:${clientIp(c)}`;
+  if (rateLimitedUntrusted(ipKey, AUTH_IP_LIMIT, AUTH_IP_WINDOW_MS)) return tooMany(c, ipKey);
   if (!workosConfigured()) return signInNotConfigured(c);
   const state = c.req.query('state') ?? '';
   const code = c.req.query('code') ?? '';
@@ -164,6 +204,8 @@ api.get('/auth/workos/callback', async (c) => {
 });
 
 api.get('/auth/google/callback', async (c) => {
+  const ipKey = `ip:${clientIp(c)}`;
+  if (rateLimitedUntrusted(ipKey, AUTH_IP_LIMIT, AUTH_IP_WINDOW_MS)) return tooMany(c, ipKey);
   const attempt = db.prepare('SELECT * FROM login_attempts WHERE id=?').get(c.req.query('attempt') ?? '') as any;
   const caId = c.req.query('connected_account_id') ?? attempt?.connected_account_id;
   if (!attempt || c.req.query('status') === 'failed' || !caId) return loginFailed(c);
@@ -183,6 +225,11 @@ api.get('/auth/google/callback', async (c) => {
 });
 
 api.post('/auth/dev', async (c) => {
+  // No session exists yet on this path, so the IP is the only key there is. It is
+  // unauthenticated traffic, so it goes in the untrusted pool: the library forbids
+  // putting an `ip:` key in the privileged one (it would let IP churn evict users).
+  const ipKey = `ip:${clientIp(c)}`;
+  if (rateLimitedUntrusted(ipKey, AUTH_IP_LIMIT, AUTH_IP_WINDOW_MS)) return tooMany(c, ipKey);
   const body = await c.req.json<{ email: string; name?: string }>().catch((): { email: string; name?: string } => ({ email: '' }));
   const email = (body?.email ?? '').trim();
   const classification = isSignableEmail(email) ? classifyEmail(email, emailLists()) : { audience: 'fan' as const, role: null };
@@ -310,7 +357,11 @@ api.get('/bots/:id/rows', (c) => {
 });
 
 api.post('/bots/:id/messages', async (c) => {
-  const b = ownBot(c.get('user').id, c.req.param('id'));
+  const user = c.get('user');
+  // Before any work: this route is the one that spends model tokens.
+  const userKey = `user:${user.id}`;
+  if (rateLimited(userKey, USER_LIMIT, USER_WINDOW_MS)) return tooMany(c, userKey);
+  const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const { text } = await c.req.json<{ text: string }>();
   if (!text?.trim()) return c.json({ error: 'empty' }, 400);
@@ -323,14 +374,20 @@ api.post('/bots/:id/messages', async (c) => {
 });
 
 api.post('/bots/:id/interrupt', (c) => {
-  const b = ownBot(c.get('user').id, c.req.param('id'));
+  const user = c.get('user');
+  const userKey = `user:${user.id}`;
+  if (rateLimited(userKey, ACTION_LIMIT, ACTION_WINDOW_MS)) return tooMany(c, userKey);
+  const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);
   return c.json({ ok: true });
 });
 
 api.post('/bots/:id/fresh', (c) => {
-  const b = ownBot(c.get('user').id, c.req.param('id'));
+  const user = c.get('user');
+  const userKey = `user:${user.id}`;
+  if (rateLimited(userKey, ACTION_LIMIT, ACTION_WINDOW_MS)) return tooMany(c, userKey);
+  const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);
   clearConversation(b.id);

@@ -9,6 +9,7 @@ import { composioTools, toolkitInfo } from '../composio.js';
 import { systemPrompt } from './prompt.js';
 import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
+import { bumpUsage, checkQuota, type QuotaReason } from '../lib/usage-quota.js';
 import { activityFor, audienceOf, availableTools, fanRefusal, humanizeSlug, isStaffOnlyTool, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
 import type { Audience } from '../lib/email-allowlist.js';
 
@@ -147,6 +148,14 @@ async function runTurn(botId: string, trigger: Trigger) {
     for (let step = 0; step < MAX_STEPS; step++) {
       if (ctrl.signal.aborted) throw new Error('interrupted');
       const result = await callModel(ctx, tools, audience, ctrl.signal);
+      // Out of daily budget: say so in the conversation and stop, rather than
+      // spending a token we are not allowed to spend.
+      if (result.blocked) {
+        const body: MessageBody = { type: 'message', role: 'assistant', text: quotaNotice(result.blocked) };
+        appendRow(botId, 'message', body);
+        db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
+        return;
+      }
       appendHistory(botId, result.output);
       const calls = result.output.filter((o: any) => o.type === 'function_call');
       if (!calls.length) break;
@@ -271,9 +280,27 @@ async function finishPending(ctx: ToolCtx, st: PendingState, _reason: string) {
 
 // ---------- model call with streaming into a message row ----------
 
-async function callModel(ctx: ToolCtx, tools: any[], audience: Audience, signal: AbortSignal): Promise<{ output: any[] }> {
+async function callModel(ctx: ToolCtx, tools: any[], audience: Audience, signal: AbortSignal): Promise<{ output: any[]; blocked?: QuotaReason }> {
   const { botId, userId } = ctx;
   const bot = getBotRow(botId);
+
+  // The daily wall, checked immediately before the spend. Read the classification the
+  // same way prompt.ts and audienceOf do — straight from the users row, because the
+  // turn may have been started by a routine with no request context.
+  const user = db.prepare('SELECT audience, role FROM users WHERE id=?').get(userId) as any;
+  let blocked: QuotaReason | null = null;
+  try {
+    const q = checkQuota(db, userId, user?.audience ?? null, user?.role ?? null);
+    if (!q.allowed) blocked = q.reason ?? 'unavailable';
+  } catch {
+    // Fail closed: an unreadable ledger must deny the spend, never allow it.
+    blocked = 'unavailable';
+  }
+  if (blocked) {
+    console.warn(`[agent] quota refused a turn for ${bot?.name ?? botId} (${blocked})`);
+    return { output: [], blocked };
+  }
+
   // Runs inside the bot's serial queue, so compaction can't race a turn.
   const history = await maybeCompact(botId, loadHistory(botId)).catch(() => loadHistory(botId));
   // The model is only called when no approval is pending, so every orphaned call can be repaired.
@@ -351,7 +378,27 @@ async function callModel(ctx: ToolCtx, tools: any[], audience: Audience, signal:
   if (msgSeq !== null) flush(false);
   if (!final) throw new Error('model stream ended without a response');
   if (final.usage?.input_tokens) noteUsage(botId, final.usage.input_tokens, history.length);
+  // Record the spend for the daily wall. Non-fatal: a ledger write failure must not
+  // turn a delivered answer into an error for the user.
+  try {
+    bumpUsage(db, userId, { inputTokens: final.usage?.input_tokens ?? 0, outputTokens: final.usage?.output_tokens ?? 0 });
+  } catch (e: any) {
+    console.warn(`[agent] usage write failed for ${botId}: ${e?.message ?? e}`);
+  }
   return { output: final.output ?? [] };
+}
+
+/**
+ * What a user sees when their daily budget is gone. It names which wall they hit, so
+ * the message is actionable rather than a silent stop, and never carries numbers about
+ * the account beyond their own limit.
+ */
+function quotaNotice(reason: QuotaReason): string {
+  if (reason === 'unavailable') {
+    return `I couldn't check today's usage for this account, so I've stopped rather than risk spending past the limit. Please try again in a moment; if it keeps happening, tell someone on the label.`;
+  }
+  const what = reason === 'requests' ? 'message limit' : 'usage limit';
+  return `I've reached today's ${what} for this account, so I can't answer any more right now. It resets at midnight UTC. If this is unexpected, ask someone on the label to raise the limit.`;
 }
 
 // ---------- misc ----------
