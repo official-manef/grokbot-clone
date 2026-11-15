@@ -20,7 +20,7 @@ a reported gap, never a boot failure.
 | `realtime` | `REALTIME_BASE_URL`, `REALTIME_API_KEY`, `REALTIME_MODEL` | `POST /api/voice/session` returns `501 capability_unavailable`; UI marks calls unavailable |
 | `desktop` | `DESKTOP_MODE` (`docker` default, `mso`, `orgo`, `disabled`); `orgo` also needs `ORGO_API_KEY` | `disabled`, or `orgo` without `ORGO_API_KEY`, reports `capabilities.desktop: false`. `disabled` also makes `availableTools()` drop the computer, browser, shell and `save_file` tools |
 | `integrations` | `COMPOSIO_API_KEY` | app catalog and connections answer `501`; the bot runs without the user's Composio tools |
-| `signin` | derived from `COMPOSIO_API_KEY` | without it, only the dev login (`DEV_LOGIN=1`, default `0`) gets anyone in |
+| `signin` | `WORKOS_API_KEY` + `WORKOS_CLIENT_ID` (AuthKit), or `COMPOSIO_API_KEY` with `AUTH_PROVIDER=composio` | `GET /api/auth/google/start` answers `503 sign-in not configured` and warns once at boot; only the dev login (`DEV_LOGIN=1`, default `0`) gets anyone in |
 
 `XAI_BASE_URL`, `XAI_API_KEY` and `XAI_MODEL` are still accepted in place of the
 `LLM_*` names, and `LLM_*` wins when both are set. The alias resolution lives in
@@ -30,6 +30,12 @@ a reported gap, never a boot failure.
 `SESSION_SECRET` keys the owner sign-in link and the bearer token each agent uses
 on `/mcp/<bot>`. Left unset, `env.ts` generates a random per-process secret and
 warns, so owner links and agent MCP tokens do not survive a restart.
+
+Sign-in itself is bounded: `/api/auth/{dev,owner,google/start,workos/callback,link}`
+count hits per client in a fixed window (`server/src/lib/rate-limit.ts`) and answer
+`429` with `Retry-After` when a bucket is full. `/mcp/<bot>` is bounded per bot, not
+per address, because every engine on the host arrives from one address. The counter
+lives in process memory, so a restart forgives everyone.
 
 ## 2. Provider adapters
 

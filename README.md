@@ -171,7 +171,8 @@ The keys you need:
 | Key | Used for |
 |---|---|
 | `ORGO_API_KEY`, `ORGO_COMPUTER_ID` | The shared computer and its screens (`DESKTOP_MODE=orgo` or `HQ_LOCAL=1` only; the default `docker` mode needs neither) |
-| `COMPOSIO_API_KEY` | Connected apps and Google sign-in |
+| `COMPOSIO_API_KEY` | Connected apps; Google sign-in when `AUTH_PROVIDER=composio` |
+| `WORKOS_API_KEY`, `WORKOS_CLIENT_ID` | Sign-in with WorkOS AuthKit (the default flow when both are set) |
 | `LLM_*`, `IMAGE_*`, `TTS_*`, `STT_*`, `REALTIME_*` | Model, image, speech and realtime endpoints, each optional (see below) |
 | `XAI_API_KEY` | The `LLM_API_KEY` fallback when `LLM_*` is unset (legacy name) |
 | `SEARCH_BASE_URL`, `SEARCH_API_KEY` | The local `web_search` tool; unset hides the tool |
@@ -218,9 +219,15 @@ rather than failing a click. See [`docs/MANEF-PORT.md`](docs/MANEF-PORT.md).
 
 ```bash
 npm run typecheck       # server and web
+npm test                # server/test, no keys or Docker needed
 npm run build
 node tests/e2e.mjs https://<your-url>    # needs DEV_LOGIN=1, or E2E_SESSION=<session cookie>
 ```
+
+`npm test` runs `server/test/*.test.mjs`: the capability contract, the provider
+adapters against a local mock, the sign-in limiter, WorkOS sign-in, the desktop
+layer's safety properties, and the prompt/tool text a model is given.
+`.github/workflows/ci.yml` runs typecheck, tests and build on every push.
 
 The e2e suite creates a temporary bot (with its own Hermes gateway and screen), exercises chat, the browser on its screen, the live viewer, connected apps, voice sessions and settings, then deletes it. It calls real providers.
 
