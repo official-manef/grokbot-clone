@@ -146,12 +146,10 @@ const READ_RE = /_(GET|LIST|SEARCH|FETCH|FIND|READ|RETRIEVE|QUERY|LOOKUP|CHECK|D
 export const isReadOnlySlug = (slug: string) => READ_RE.test(slug.toUpperCase());
 
 // ---------- sign-in via Composio-managed Google (Gmail) connection ----------
-
-export async function startGoogleLogin(provisionalUserId: string, callbackUrl: string) {
-  const session = await composioClient().create(provisionalUserId, { manageConnections: false } as any);
-  const req = await (session as any).authorize('gmail', { callbackUrl });
-  return { redirectUrl: req.redirectUrl as string, connectedAccountId: req.id as string | undefined };
-}
+// Removed the start half (`startGoogleLogin`): Google OAuth belongs to the game and
+// antinrml.com, not this app. `googleProfile` stays because /auth/google/callback is
+// still mounted for URLs already in the wild; with no way to create an attempt row
+// it cannot mint anything, and it refuses a non-staff address besides.
 
 export async function googleProfile(connectedAccountId: string): Promise<{ email: string; name?: string }> {
   const r: any = await composioClient().tools.proxyExecute({

@@ -36,8 +36,12 @@ test('exact email still works, alone and next to a domain list', () => {
   assert.equal(isEmailAllowed('other@elsewhere.io', both(['boss@elsewhere.io'], ['antinrml.com'])), false);
 });
 
-test('both lists empty allows anyone, which is the documented open default', () => {
-  assert.equal(isEmailAllowed('whoever@wherever.test', both([], [])), true);
+test('both lists empty denies: an unconfigured allowlist cannot mean "anyone"', () => {
+  // This test used to assert `true` — "the documented open default". That default is
+  // what let anyone into an app whose session can reach `shell` and the host's files,
+  // so it was changed to fail closed. The empty case is now a refusal, everywhere.
+  assert.equal(isEmailAllowed('whoever@wherever.test', both([], [])), false);
+  assert.equal(isEmailAllowed('boss@antinrml.com', both([], [])), false, 'no list, no entry — even for a staff-looking domain');
 });
 
 test('only an email list set is exact-match only, unchanged', () => {

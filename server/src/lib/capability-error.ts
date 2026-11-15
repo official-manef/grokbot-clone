@@ -29,7 +29,7 @@ const LABELS: Record<CapabilityKey, string> = {
   realtime: 'Realtime voice',
   desktop: 'Bot desktop',
   integrations: 'App connections',
-  signin: 'Google sign-in',
+  signin: 'Staff sign-in',
   web_search: 'Web search (SEARCH_BASE_URL)',
   x_search: 'X search (LLM_X_SEARCH=1)',
 };
@@ -43,7 +43,7 @@ const REQUIRED: Record<CapabilityKey, string[]> = {
   realtime: ['REALTIME_BASE_URL', 'REALTIME_API_KEY', 'REALTIME_MODEL'],
   desktop: ['DESKTOP_MODE'],
   integrations: ['COMPOSIO_API_KEY'],
-  signin: ['COMPOSIO_API_KEY'],
+  signin: ['WORKOS_API_KEY', 'WORKOS_CLIENT_ID', 'ALLOWED_EMAILS or ALLOWED_EMAIL_DOMAINS'],
   web_search: ['SEARCH_BASE_URL'],
   x_search: ['LLM_X_SEARCH=1', 'LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL', 'LLM_PROTOCOL=responses'],
 };

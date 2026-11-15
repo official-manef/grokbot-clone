@@ -20,7 +20,7 @@ a reported gap, never a boot failure.
 | `realtime` | `REALTIME_BASE_URL`, `REALTIME_API_KEY`, `REALTIME_MODEL` | `POST /api/voice/session` returns `501 capability_unavailable`; UI marks calls unavailable |
 | `desktop` | `DESKTOP_MODE` (`docker` default, `mso`, `orgo`, `disabled`); `orgo` also needs `ORGO_API_KEY` | `disabled`, or `orgo` without `ORGO_API_KEY`, reports `capabilities.desktop: false`. `disabled` also makes `availableTools()` drop the computer, browser, shell and `save_file` tools |
 | `integrations` | `COMPOSIO_API_KEY` | app catalog and connections answer `501`; the bot runs without the user's Composio tools |
-| `signin` | `WORKOS_API_KEY` + `WORKOS_CLIENT_ID` (AuthKit), or `COMPOSIO_API_KEY` with `AUTH_PROVIDER=composio` | `GET /api/auth/google/start` answers `503 sign-in not configured` and warns once at boot; only the dev login (`DEV_LOGIN=1`, default `0`) gets anyone in |
+| `signin` | `WORKOS_API_KEY` + `WORKOS_CLIENT_ID` (AuthKit) **and** a non-empty `ALLOWED_EMAILS`/`ALLOWED_EMAIL_DOMAINS` | `GET /api/auth/google/start` answers `503 sign-in not configured` and warns once at boot; with an empty allowlist it refuses before redirecting (`/?login=refused`). There is no Google/Composio sign-in here any more: that flow is fan-facing and lives in the game / antinrml.com |
 
 `XAI_BASE_URL`, `XAI_API_KEY` and `XAI_MODEL` are still accepted in place of the
 `LLM_*` names, and `LLM_*` wins when both are set. The alias resolution lives in

@@ -109,13 +109,47 @@ const authProvider: AuthProvider = authProviderRaw
     ? 'workos'
     : 'composio';
 
+const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
+const serverUrl = process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`;
+
+/** A URL on this machine. Unparseable counts as not local, so it reads as deployed. */
+function isLoopbackUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Derived, never trusted from `DEV_LOGIN` alone: a `.env` shipped `DEV_LOGIN=1`
+ * once already, so "does this process look deployed" is answered from the URLs it
+ * advertises and from NODE_ENV. Used by the dev-login guard.
+ */
+const production = process.env.NODE_ENV === 'production' || !isLoopbackUrl(appUrl) || !isLoopbackUrl(serverUrl);
+
+/** The staff allowlists, resolved once so the capability report and the routes agree. */
+const allowedEmails = (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const allowedEmailDomains = (process.env.ALLOWED_EMAIL_DOMAINS ?? '').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+
+/**
+ * Whether staff sign-in has everything it needs: an identity provider AND a
+ * non-empty allowlist. Both halves matter, because `isEmailAllowed` fails closed:
+ * an empty allowlist admits nobody, so offering the button would be a dead end.
+ */
+export const staffSignInConfigured = () =>
+  Boolean(workosApiKey && workosClientId) && (allowedEmails.length > 0 || allowedEmailDomains.length > 0);
+
 export const env = {
   port: Number(process.env.PORT ?? 8787),
-  appUrl: process.env.APP_URL ?? 'http://localhost:5173',
+  appUrl,
   /** Public URL of this server, used for OAuth callbacks. */
-  serverUrl: process.env.SERVER_URL ?? `http://localhost:${process.env.PORT ?? 8787}`,
+  serverUrl,
   sessionSecret,
   devLogin: process.env.DEV_LOGIN === '1',
+  /** True when this process looks deployed (see above); the dev-login guard needs it. */
+  production,
   dbPath: process.env.DB_PATH ?? new URL('../../data/grokbot.db', import.meta.url).pathname,
   composioKey,
 
@@ -202,10 +236,10 @@ export const env = {
   primaryCdpUrl: process.env.PRIMARY_CDP_URL ?? '',
   /** Bots that can each have a screen. */
   maxBots: Number(process.env.MAX_BOTS ?? 4),
-  /** Comma-separated emails allowed to sign in; empty = no email rule (see allowedEmailDomains). */
-  allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  /** Comma-separated emails allowed to sign in; empty = the list admits nobody (see lib/email-allowlist.ts). */
+  allowedEmails,
   /** Comma-separated email domains allowed to sign in (a leading '@' is dropped); empty = no domain rule. */
-  allowedEmailDomains: (process.env.ALLOWED_EMAIL_DOMAINS ?? '').split(',').map((s) => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean),
+  allowedEmailDomains,
 
   /**
    * Composio powers app connections and, with AUTH_PROVIDER=composio, the legacy
@@ -285,7 +319,8 @@ export const capabilities: Record<Capability, boolean> = {
   realtime: Boolean(realtimeResolved),
   desktop: desktopMode !== 'disabled' && (desktopMode !== 'orgo' || Boolean(env.orgo.key)),
   integrations: Boolean(composioKey),
-  signin: Boolean(composioKey),
+  /** Staff sign-in: an AuthKit provider plus a non-empty allowlist (fail-closed predicate). */
+  signin: staffSignInConfigured(),
 };
 
 /**
