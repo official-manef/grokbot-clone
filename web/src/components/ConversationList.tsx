@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import type { Conversation } from '@shared/types';
 import { useStore } from '../store';
@@ -51,6 +51,11 @@ export function ConversationList({ botId, onClose }: { botId: string; onClose: (
     }
   };
 
+  /** Replace one row's title in place, so the list does not reload for a rename. */
+  const setTitle = (generation: number, title: string, source: Conversation['source']) => {
+    setItems((list) => (list ?? []).map((c) => (c.generation === generation ? { ...c, title, source } : c)));
+  };
+
   return (
     <div className="menu menu--list is-left" role="dialog" aria-label="Conversation history">
       <div className="menu__header">Conversation history</div>
@@ -58,25 +63,123 @@ export function ConversationList({ botId, onClose }: { botId: string; onClose: (
       {!error && items === null && <div className="menu__empty">Loading…</div>}
       {!error && items?.length === 0 && <div className="menu__empty">No conversations yet.</div>}
       {items?.map((c) => (
-        <button
+        <Row
           key={c.generation}
-          type="button"
-          className={`menu__item menu__item--row${c.generation === current ? ' is-current' : ''}`}
-          onClick={() => void open(c.generation)}
+          conversation={c}
+          isCurrent={c.generation === current}
+          busy={busy === c.generation}
           disabled={busy !== null}
-          aria-current={c.generation === current ? 'true' : undefined}
-        >
-          <span className="menu__item-title">{c.title || `Chat ${c.generation}`}</span>
-          <span className="menu__hint">
-            {busy === c.generation ? 'Opening…' : c.generation === current ? 'Current' : new Date(c.updatedAt).toLocaleDateString()}
-          </span>
-        </button>
+          onOpen={() => void open(c.generation)}
+          onRenamed={(title, source) => setTitle(c.generation, title, source)}
+          onError={setError}
+          botId={botId}
+        />
       ))}
       {transcript?.generation !== current && current !== null && (
         <button type="button" className="menu__item" onClick={() => void open(current)}>
           <span>Back to the current chat</span>
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * One row: opens on click, renames on the pencil (or F2).
+ *
+ * A rename is an inline input rather than a modal: the row is the thing being
+ * named, and a dialog would hide which conversation is being changed. Escape
+ * cancels, Enter saves, and an empty save clears the title so the fallback returns —
+ * that is what the server does with an empty body, and it is the only way back to
+ * an automatic name once it has been overwritten.
+ */
+function Row({
+  conversation: c,
+  isCurrent,
+  busy,
+  disabled,
+  onOpen,
+  onRenamed,
+  onError,
+  botId,
+}: {
+  conversation: Conversation;
+  isCurrent: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onOpen: () => void;
+  onRenamed: (title: string, source: Conversation['source']) => void;
+  onError: (message: string | null) => void;
+  botId: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.title);
+  const [saving, setSaving] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const saved = await api.renameConversation(botId, c.generation, draft);
+      onRenamed(saved.title, saved.source as Conversation['source']);
+      onError(null);
+      setEditing(false);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not rename that conversation');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="menu__item menu__item--row is-editing">
+        <input
+          ref={input}
+          value={draft}
+          aria-label={`Rename ${c.title || `chat ${c.generation}`}`}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save();
+            if (e.key === 'Escape') { setDraft(c.title); setEditing(false); }
+            e.stopPropagation();
+          }}
+          className="menu__rename-input"
+        />
+        <span className="menu__hint">{saving ? 'Saving…' : '↵ save · esc cancel'}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`menu__item menu__item--row${isCurrent ? ' is-current' : ''}`}
+      aria-current={isCurrent ? 'true' : undefined}
+      onKeyDown={(e) => { if (e.key === 'F2') { setDraft(c.title); setEditing(true); } }}
+    >
+      <button
+        type="button"
+        className="menu__item-main"
+        onClick={onOpen}
+        disabled={disabled}
+      >
+        <span className="menu__item-title">{c.title || `Chat ${c.generation}`}</span>
+      </button>
+      <button
+        type="button"
+        className="menu__rename"
+        aria-label={`Rename ${c.title || `chat ${c.generation}`}`}
+        title="Rename"
+        disabled={disabled || saving}
+        onClick={() => { setDraft(c.title); setEditing(true); }}
+      >
+        ✎
+      </button>
+      <span className="menu__hint">
+        {busy ? 'Opening…' : isCurrent ? 'Current' : new Date(c.updatedAt).toLocaleDateString()}
+      </span>
     </div>
   );
 }

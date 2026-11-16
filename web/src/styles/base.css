@@ -123,6 +123,27 @@ a { color: inherit; }
 }
 .menu__item--row .menu__hint { flex: none; padding-left: 12px; }
 .menu__item.is-current { background: var(--color-bg-hover); font-weight: 600; }
+
+/* A row is open-on-click plus rename-on-pencil, so the row itself is not a button. */
+.menu__item-main {
+  display: flex; align-items: baseline; flex: 1; min-width: 0;
+  text-align: left; padding: 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer;
+}
+.menu__item-main:disabled { cursor: default; }
+.menu__rename {
+  flex: none; padding: 0 6px; margin-left: 4px; background: none; border: 0; cursor: pointer;
+  color: var(--color-text-tertiary); font-size: 12px; line-height: 1; opacity: 0;
+}
+.menu__item--row:hover .menu__rename,
+.menu__rename:focus-visible { opacity: 1; }
+.menu__rename:hover { color: var(--color-text-primary); }
+.menu__rename:disabled { cursor: default; opacity: 0; }
+.menu__item.is-editing { align-items: center; }
+.menu__rename-input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid var(--color-border-secondary); background: var(--color-bg-pane);
+  color: var(--color-text-primary); font: inherit;
+}
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 .toast {
