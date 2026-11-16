@@ -38,6 +38,9 @@ const TEST_CONFIG = {
   maxScreens: MAX_SCREENS,
 };
 
+/** The display-readiness probe create/start/restart issue: `docker exec <name> sh -c ...` */
+const isReadyProbe = (args) => args[0] === 'exec' && args.includes('sh') && args.some((a) => String(a).includes('xdpyinfo'));
+
 function createRecordingRunner(overrides = () => undefined) {
   const calls = [];
   const run = async (command, args, timeoutMs) => {
@@ -50,6 +53,13 @@ function createRecordingRunner(overrides = () => undefined) {
         stdout: JSON.stringify([{ Name: `/${args[1]}`, State: { Status: 'running' } }]),
         stderr: '',
       };
+    }
+    // A real box answers the readiness probe once its Xvfb displays are up. The
+    // probe asks per display and expects the ones that answered on stdout.
+    if (isReadyProbe(args)) {
+      const probe = String(args[args.length - 1]);
+      const displays = [...probe.matchAll(/xdpyinfo -display (:\d+)/g)].map((m) => m[1]);
+      return { code: 0, stdout: displays.join('\n'), stderr: '' };
     }
     return { code: 0, stdout: 'ok\n', stderr: '' };
   };
@@ -119,7 +129,7 @@ test('create passes enable_icc=false network and cap-drop/no-new-privileges/memo
   assert.equal(created.status, 'running');
   assert.equal(created.resolution, '1280x800x24');
 
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4, 'network create, docker run, readiness probe, inspect');
   assert.deepEqual(calls[0].args, [
     'network',
     'create',
@@ -220,7 +230,7 @@ test('injected runner receives exact argv arrays for start, stop, suspend, and r
   await box.restart('grokbot-u1');
 
   assert.deepEqual(
-    calls.map((c) => ({ command: c.command, args: c.args })),
+    calls.filter((c) => !isReadyProbe(c.args)).map((c) => ({ command: c.command, args: c.args })),
     [
       { command: 'docker', args: ['start', 'grokbot-u1'] },
       { command: 'docker', args: ['stop', '-t', '10', 'grokbot-u1'] },
@@ -228,7 +238,32 @@ test('injected runner receives exact argv arrays for start, stop, suspend, and r
       { command: 'docker', args: ['restart', '-t', '10', 'grokbot-u1'] },
     ],
   );
-  assert.equal(calls[1].timeoutMs, 60_000);
-  assert.equal(calls[2].timeoutMs, 60_000);
-  assert.equal(calls[3].timeoutMs, 60_000);
+  const lifecycleCalls = calls.filter((c) => !isReadyProbe(c.args));
+  assert.deepEqual(lifecycleCalls.map((c) => c.timeoutMs), [undefined, 60_000, 60_000, 60_000]);
+
+  // start and restart boot the entrypoint again, so both must wait for the displays;
+  // stop and suspend must not (a stopped box has none to wait for).
+  assert.equal(calls.filter((c) => isReadyProbe(c.args)).length, 2, 'start and restart each probe readiness once');
+});
+
+test('create does not return until every display answers, and gives up loudly', async () => {
+  // A box whose later displays never come up must fail create, not hand back a
+  // half-booted box that fails on the bot's first screenshot.
+  const { run } = createRecordingRunner((command, args) => {
+    if (isReadyProbe(args)) return { code: 0, stdout: ':99', stderr: '' };
+    return undefined;
+  });
+  const box = createDockerBoxRuntime(run, { ...TEST_CONFIG, displayTimeoutMs: 300 });
+  await assert.rejects(() => box.create('u1', { name: 'grokbot-late' }), /never brought up :1 :2 :3/);
+});
+
+test('a probe that answers every display lets create return on the first poll', async () => {
+  let probes = 0;
+  const { run } = createRecordingRunner((command, args) => {
+    if (isReadyProbe(args)) { probes += 1; return undefined; }
+    return undefined;
+  });
+  const box = createDockerBoxRuntime(run, TEST_CONFIG);
+  await box.create('u2', { name: 'grokbot-ready' });
+  assert.equal(probes, 1, 'no retry loop when the box is already up');
 });

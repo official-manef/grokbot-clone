@@ -22,6 +22,8 @@ export interface BoxConfig {
   resolution: string;
   socketPath: string;
   maxScreens?: number;
+  /** How long `create`/`start`/`restart` wait for the box's displays. Default 15s. */
+  displayTimeoutMs?: number;
 }
 
 /** Result returned by an injected command runner. */

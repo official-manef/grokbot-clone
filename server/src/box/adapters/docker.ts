@@ -129,6 +129,30 @@ export function createDockerBoxRuntime(
     return out.trim();
   };
 
+  /**
+   * `docker run -d` returns when the container starts, not when the entrypoint has
+   * its displays up. The entrypoint starts Xvfb one display at a time, so :99 is
+   * ready in ~130ms while :2 and :3 need ~1s. Measured: without this wait, a
+   * screenshot on screen-3 immediately after create always failed with
+   * "unable to open X server :3" (5/5 trials). A bot's first action can be exactly
+   * that screenshot, so create does not return until every display answers.
+   */
+  const waitForDisplays = async (name: string, count: number): Promise<void> => {
+    const deadline = Date.now() + (cfg.displayTimeoutMs ?? 15_000);
+    let pending = Array.from({ length: count }, (_, i) => displayFor(i));
+    while (pending.length) {
+      const probe = pending.map((d) => `(xdpyinfo -display ${d} >/dev/null 2>&1 && echo ${d})`).join('; ');
+      const r = await execDocker(['exec', assertName(name), 'sh', '-c', probe], 20_000);
+      const up = new Set(asText(r.stdout).split('\n').filter(Boolean));
+      pending = pending.filter((d) => !up.has(d));
+      if (!pending.length) return;
+      if (Date.now() > deadline) {
+        throw new Error(`box ${name} never brought up ${pending.join(' ')} (the container may have exited)`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
   const create = async (userId: string, opts: { name?: string } = {}): Promise<DesktopComputer> => {
     // `opts.name ?` would treat '' as "not given" and silently fall back to a
     // generated name. An explicitly empty name is a bug at the call site, so it is
@@ -152,6 +176,7 @@ export function createDockerBoxRuntime(
         await dockerOk(['start', name]).catch(() => {});
       } else throw e;
     }
+    await waitForDisplays(name, maxScreens);
     const info = await inspect(name);
     return { id: name, name, status: String(info?.State?.Status ?? 'running'), resolution: cfg.resolution, vnc_password: null, asleep: null };
   };
@@ -173,9 +198,21 @@ export function createDockerBoxRuntime(
     };
   };
 
-  const start = async (id: string): Promise<{ ok: true }> => { await dockerOk(['start', assertName(id)]); return { ok: true }; };
+  const start = async (id: string): Promise<{ ok: true }> => {
+    // A stopped container boots the entrypoint again, so its displays are not up
+    // the moment `docker start` returns either.
+    const name = assertName(id);
+    await dockerOk(['start', name]);
+    await waitForDisplays(name, maxScreens);
+    return { ok: true };
+  };
   const stop = async (id: string): Promise<{ ok: true }> => { await dockerOk(['stop', '-t', '10', assertName(id)], 60_000); return { ok: true }; };
-  const restart = async (id: string): Promise<{ ok: true }> => { await dockerOk(['restart', '-t', '10', assertName(id)], 60_000); return { ok: true }; };
+  const restart = async (id: string): Promise<{ ok: true }> => {
+    const name = assertName(id);
+    await dockerOk(['restart', '-t', '10', name], 60_000);
+    await waitForDisplays(name, maxScreens);
+    return { ok: true };
+  };
   const remove = async (id: string): Promise<void> => {
     const name = assertName(id);
     await execDocker(['rm', '-f', name], 60_000);
@@ -221,10 +258,24 @@ export function createDockerBoxRuntime(
   };
 
   const drag = async (id: string, screen: string | undefined, b: BoxDragInput): Promise<{ ok: true }> => {
-    await xdo(id, screen, ['mousemove', String(Math.round(b.start_x)), String(Math.round(b.start_y))]);
-    await xdo(id, screen, ['mousedown', '1']);
-    await xdo(id, screen, ['mousemove', String(Math.round(b.end_x)), String(Math.round(b.end_y))]);
-    await xdo(id, screen, ['mouseup', '1']);
+    const from = { x: Math.round(b.start_x), y: Math.round(b.start_y) };
+    const to = { x: Math.round(b.end_x), y: Math.round(b.end_y) };
+    // A single jump from start to end is not a drag: xfwm4 needs motion events while
+    // the button is held, so an instant two-position move reads as a click at the
+    // start point. Verified on a real box — the window never moved. Interpolate, and
+    // chain the whole gesture into ONE xdotool invocation so it stays a single round
+    // trip and stays an argv array (no shell).
+    const steps = 12;
+    const gesture = ['mousemove', String(from.x), String(from.y), 'mousedown', '1'];
+    for (let i = 1; i <= steps; i++) {
+      gesture.push(
+        'mousemove',
+        String(Math.round(from.x + ((to.x - from.x) * i) / steps)),
+        String(Math.round(from.y + ((to.y - from.y) * i) / steps)),
+      );
+    }
+    gesture.push('mouseup', '1');
+    await xdo(id, screen, gesture);
     return { ok: true };
   };
 
