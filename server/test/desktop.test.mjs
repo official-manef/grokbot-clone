@@ -56,11 +56,20 @@ test('desktop bash runs inside the box, as an unprivileged user', () => {
 });
 
 test('container is created without host privileges', () => {
-  const src = read('server/src/desktop.ts');
-  assert.match(src, /'--cap-drop', 'ALL'/, 'capabilities must be dropped');
-  assert.match(src, /'--security-opt', 'no-new-privileges'/);
-  assert.match(src, /'--pids-limit'/);
-  assert.match(src, /'--memory'/);
+  // The flags moved with the code: `desktop.ts` is now a thin wrapper over
+  // `box/adapters/docker.ts`, and the adapter builds the `docker run` argv. The
+  // assertion follows the flag rather than being deleted with its old location, and
+  // it also checks the wrapper no longer builds its own `run`, which is what could
+  // drift back in.
+  const adapter = read('server/src/box/adapters/docker.ts');
+  assert.match(adapter, /'--cap-drop', 'ALL'/, 'capabilities must be dropped');
+  assert.match(adapter, /'--security-opt', 'no-new-privileges'/);
+  assert.match(adapter, /'--pids-limit'/);
+  assert.match(adapter, /'--memory'/);
+  assert.match(adapter, /enable_icc=false/, 'each box needs its own network with peer traffic off');
+
+  const wrapper = read('server/src/desktop.ts');
+  assert.doesNotMatch(wrapper, /'run', '-d'/, 'the wrapper must not build a second docker run');
 });
 
 test('screenshot path validates the display in the image too', () => {
