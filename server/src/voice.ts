@@ -12,6 +12,7 @@ import { enqueue } from './agent/loop.js';
 import { computerState } from './computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
 import { listMemories } from './engine-memory.js';
+import { compactCallTranscript } from './agent/call-transcript.js';
 import { mintRealtimeSecret, synthesize, transcribe, listVoices as providerVoices, ttsConfigured, sttConfigured, realtimeConfigured } from './providers/speech.js';
 import { llm, model as llmModel } from './providers/llm.js';
 import { CapabilityError } from './lib/capability-error.js';
@@ -356,16 +357,23 @@ voiceApi.post('/tool', async (c) => {
 
 async function summarizeCall(botName: string, transcript: { role: string; text: string }[], tasks: string[]): Promise<string | null> {
   if (!transcript.length && !tasks.length) return null;
-  const lines = transcript.map((t) => `${t.role === 'user' ? 'User' : botName}: ${t.text}`).join('\n').slice(-12_000);
-  // The BYOK adapter speaks whichever protocol the endpoint implements, so a call
-  // summary works on a chat-only gateway too.
+  const rendered = transcript.map((t) => `${t.role === 'user' ? 'User' : botName}: ${t.text}`).join('\n');
+
+  // A long call does not fit the summariser's prompt. Cutting the string blindly
+  // (`slice(-12_000)`) throws away the start of the conversation — usually the part
+  // that says what the call was about — and can split a sentence in half. Compact it
+  // instead: drop the oldest exchanges first, and only fall back to a hard cut when
+  // even the compacted text is too big, so a short call is untouched and a long one
+  // still keeps its opening line.
+  const compacted = compactCallTranscript(transcript, rendered, botName);
+
   const res: any = await llm().responses.create({
     model: llmModel(),
     reasoning: { effort: 'low' },
     store: false,
     input: [
       { role: 'system', content: `Summarise this voice call between the user and ${botName} in one short sentence (max 25 words), past tense, third person ("Talked about…", "Asked ${botName} to…"). No preamble.` },
-      { role: 'user', content: `${lines || '(no transcript)'}${tasks.length ? `\n\nWork handed off during the call:\n${tasks.map((t) => `- ${t}`).join('\n')}` : ''}` },
+      { role: 'user', content: `${compacted || '(no transcript)'}${tasks.length ? `\n\nWork handed off during the call:\n${tasks.map((t) => `- ${t}`).join('\n')}` : ''}` },
     ],
   } as any);
   const text = String(res.output_text ?? '').trim();
