@@ -109,6 +109,20 @@ a { color: inherit; }
 .menu__item:hover { background: var(--color-bg-hover); }
 .menu__item.is-danger { color: var(--color-danger); }
 .menu__hint { color: var(--color-text-tertiary); font-size: 12px; }
+
+/* Conversation history: taller than a command menu, and its rows carry two lines. */
+.menu--list { min-width: 280px; max-width: 360px; padding: 6px; }
+.menu__header {
+  padding: 6px 10px 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--color-text-tertiary);
+}
+.menu__empty { padding: 8px 10px; font-size: 12px; color: var(--color-text-tertiary); }
+.menu__item--row { height: auto; min-height: 34px; padding: 6px 10px; align-items: baseline; }
+.menu__item--row .menu__item-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; flex: 1; min-width: 0;
+}
+.menu__item--row .menu__hint { flex: none; padding-left: 12px; }
+.menu__item.is-current { background: var(--color-bg-hover); font-weight: 600; }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 .toast {

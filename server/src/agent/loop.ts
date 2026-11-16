@@ -10,6 +10,7 @@ import { env } from '../env.js';
 import { isEmailAllowed, type Audience } from '../lib/email-allowlist.js';
 import { bumpUsage, checkQuota, type QuotaReason } from '../lib/usage-quota.js';
 import { instructionsFor } from './prompt.js';
+import { maybeTitleConversation } from './titles.js';
 import { activityFor, appToolName, humanizeSlug, policyFor } from './tools.js';
 
 /**
@@ -545,6 +546,10 @@ async function runTurn(botId: string, trigger: Trigger) {
     } catch (e: any) {
       console.warn(`[agent] usage write failed for ${botId}: ${e?.message ?? e}`);
     }
+
+    // Name the conversation once, after its first real exchange. Fire-and-forget:
+    // a title is cosmetic and must never delay or fail a turn that already answered.
+    void maybeTitleConversation(botId, bot.generation);
   } catch (e: any) {
     failed = true;
     const stopped = ctrl.signal.aborted;

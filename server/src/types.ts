@@ -215,6 +215,20 @@ export interface Toolkit {
   managedAuth: boolean; noAuth: boolean; connected: boolean;
 }
 
+/**
+ * One conversation of a bot. A bot's `generation` is the conversation counter, so
+ * this is what a history list shows: the past generations that still have rows.
+ */
+export interface Conversation {
+  botId: string;
+  generation: number;
+  title: string;
+  /** 'model' = named by the endpoint, 'fallback' = taken from the first message. */
+  source: 'model' | 'fallback';
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** Server-sent events on GET /api/events */
 export type ServerEvent =
   | { type: 'hello'; serverTime: number }

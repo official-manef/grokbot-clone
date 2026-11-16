@@ -103,16 +103,20 @@ export function getRow(botId: string, seq: number): Row | null {
   return r ? toRow(r) : null;
 }
 
-export function listRows(botId: string, opts: { beforeSeq?: number; limit?: number; afterRev?: number } = {}): Row[] {
+export function listRows(botId: string, opts: { beforeSeq?: number; limit?: number; afterRev?: number; generation?: number } = {}): Row[] {
   const b = getBotRow(botId);
   if (!b) return [];
+  // A conversation list reads a past generation, so the caller may name one. The
+  // default stays "the conversation you are in", which is what every existing caller
+  // means and what the live SSE stream patches into.
+  const gen = opts.generation ?? b.generation;
   if (opts.afterRev !== undefined) {
-    return (db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND updated_seq>? ORDER BY seq ASC').all(botId, b.generation, opts.afterRev) as any[]).map(toRow);
+    return (db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND updated_seq>? ORDER BY seq ASC').all(botId, gen, opts.afterRev) as any[]).map(toRow);
   }
   const limit = Math.min(opts.limit ?? 200, 500);
   const rows = (opts.beforeSeq
-    ? db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND seq<? ORDER BY seq DESC LIMIT ?').all(botId, b.generation, opts.beforeSeq, limit)
-    : db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? ORDER BY seq DESC LIMIT ?').all(botId, b.generation, limit)) as any[];
+    ? db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND seq<? ORDER BY seq DESC LIMIT ?').all(botId, gen, opts.beforeSeq, limit)
+    : db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? ORDER BY seq DESC LIMIT ?').all(botId, gen, limit)) as any[];
   return rows.reverse().map(toRow);
 }
 

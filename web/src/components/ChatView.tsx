@@ -6,6 +6,7 @@ import { botVars } from '../lib/colors';
 import { displayName, sortedRows, useSelectedBot, useStore } from '../store';
 import { useConfigUI } from '../configStore';
 import { Composer } from './Composer';
+import { ConversationList } from './ConversationList';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { Transcript } from './Transcript';
@@ -18,6 +19,7 @@ export function ChatView() {
   const detailsOpen = useStore((s) => s.detailsOpen);
   const set = useStore((s) => s.set);
   const [menu, setMenu] = useState(false);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
   const hasDesktop = useCapability('desktop');
   const [toast, setToast] = useState<string | null>(null);
   const rows = useMemo(() => sortedRows(transcript), [transcript]);
@@ -50,11 +52,13 @@ export function ChatView() {
               items={[
                 { label: detailsOpen ? 'Hide details' : 'Show details', hint: '⇧⌘,', onSelect: () => set({ detailsOpen: !detailsOpen }) },
                 ...(hasDesktop ? [{ label: 'Open computer', onSelect: () => set({ viewerOpen: true, viewerMode: 'watch', viewerHint: null }) }] : []),
+                { label: 'Conversation history', onSelect: () => setConversationsOpen(true) },
                 { label: 'New conversation', onSelect: () => api.fresh(bot.id).then(() => flash('Started a new conversation')).catch((e) => flash(e.message)) },
                 { label: 'Bot settings', onSelect: () => useConfigUI.getState().openBotSettings(bot.id) },
               ]}
             />
           )}
+          {conversationsOpen && <ConversationList botId={bot.id} onClose={() => setConversationsOpen(false)} />}
         </span>
         <div className="chat__header-right">
           {!detailsOpen && (

@@ -18,6 +18,8 @@ import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
+import { conversationGenerations, firstExchange, listConversations, setConversationTitle } from './conversations.js';
+import { fallbackTitle } from './agent/session-title.js';
 import { orgo } from './orgo.js';
 import { box, libraryDirFor } from './box.js';
 import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, toolkitInfo } from './composio.js';
@@ -557,7 +559,60 @@ api.get('/bots/:id/rows', (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const beforeSeq = c.req.query('beforeSeq') ? Number(c.req.query('beforeSeq')) : undefined;
-  return c.json({ generation: b.generation, rows: listRows(b.id, { beforeSeq, limit: Number(c.req.query('limit') ?? 200) }) });
+  // `generation` lets the conversation list open a past chat. It is bounded to what
+  // this bot actually has, so naming a generation cannot read another bot's rows.
+  const asked = c.req.query('generation') ? Number(c.req.query('generation')) : undefined;
+  const generation = asked !== undefined && conversationGenerations(b.id).includes(asked) ? asked : b.generation;
+  return c.json({ generation, rows: listRows(b.id, { beforeSeq, generation, limit: Number(c.req.query('limit') ?? 200) }) });
+});
+
+/**
+ * Every conversation this bot has had, newest first.
+ *
+ * A generation with rows but no stored title gets one now: a conversation that
+ * predates this feature (or whose model call failed) should still be listed under
+ * something a person recognises, rather than as "Untitled".
+ */
+api.get('/bots/:id/conversations', (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const stored = new Map(listConversations(b.id).map((x) => [x.generation, x]));
+  const generations = conversationGenerations(b.id);
+  if (!generations.includes(b.generation)) generations.unshift(b.generation);
+  const conversations = generations.map((generation) => {
+    const row = stored.get(generation);
+    if (row && row.title) return row;
+    const { user } = firstExchange(b.id, generation);
+    return {
+      botId: b.id,
+      generation,
+      title: user ? fallbackTitle(user) : generation === b.generation ? 'New chat' : `Chat ${generation}`,
+      source: 'fallback' as const,
+      createdAt: row?.createdAt ?? now(),
+      updatedAt: row?.updatedAt ?? now(),
+    };
+  });
+  return c.json({ current: b.generation, conversations });
+});
+
+/** Rename a conversation. Empty text clears the title so the fallback takes over. */
+api.patch('/bots/:id/conversations/:generation', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const generation = Number(c.req.param('generation'));
+  if (!conversationGenerations(b.id).includes(generation) && generation !== b.generation) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const body = await c.req.json<{ title?: unknown }>().catch(() => ({} as { title?: unknown }));
+  if (typeof body.title !== 'string') return c.json({ error: 'title required' }, 400);
+  const title = body.title.trim();
+  if (!title) {
+    db.prepare('DELETE FROM conversations WHERE bot_id=? AND generation=?').run(b.id, generation);
+    const { user } = firstExchange(b.id, generation);
+    return c.json({ title: user ? fallbackTitle(user) : 'New chat', source: 'fallback' });
+  }
+  const saved = setConversationTitle(b.id, generation, title, 'model');
+  return c.json({ title: saved.title, source: saved.source });
 });
 
 api.post('/bots/:id/messages', async (c) => {

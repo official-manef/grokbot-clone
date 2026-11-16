@@ -1,4 +1,4 @@
-import type { Bot, ComputerState, LiveState, Routine, Row, Toolkit, User } from '@shared/types';
+import type { Bot, ComputerState, Conversation, LiveState, Routine, Row, Toolkit, User } from '@shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -34,6 +34,10 @@ export const api = {
   createBot: (b: Pick<Bot, 'name' | 'avatarShape' | 'avatarColor' | 'mode'>) => req<{ bot: Bot }>('POST', '/bots', b),
   markRead: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/read`),
   rows: (id: string) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows`),
+  /** A past conversation, by generation, so the history list can open one. */
+  rowsOf: (id: string, generation: number) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows?generation=${generation}`),
+  conversations: (id: string) => req<{ current: number; conversations: Conversation[] }>('GET', `/bots/${id}/conversations`),
+  renameConversation: (id: string, generation: number, title: string) => req<{ title: string; source: string }>('PATCH', `/bots/${id}/conversations/${generation}`, { title }),
   send: (id: string, text: string) => req<{ row: Row }>('POST', `/bots/${id}/messages`, { text }),
   interrupt: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/interrupt`),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
