@@ -7,12 +7,16 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `2818dd7` | `0/0` in sync |
-| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `560938df` | `0/0` in sync |
-| nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched this session |
+| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `5baf043` | `0/0` in sync |
+| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `5bdbf70a` | `0/0` in sync |
+| nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
-Working trees are clean. `npm test` in grokbot: **203 pass, 0 fail**. typecheck 0 errors.
-MSO: `tsc` clean, `check-architecture` healthy, lint clean.
+Working trees are clean. `npm test` in grokbot: **205 pass, 0 fail**. typecheck 0 errors.
+MSO: `tsc` clean, `lib/desktop` suite 32/32.
+
+**The "host has 0 docker images" claim in the previous version of this file was wrong.**
+The daemon works, 26 images were present, and `docker build -t grokbot-desktop:latest
+server/desktop` succeeds. Item 2 was blocked on a wrong premise, not on the host.
 
 ## Repo layout rule (from AGENTS.md, do not break it)
 
@@ -106,28 +110,39 @@ app owns conversation history. Two honest options:
 
 Ask the owner which. Do not guess.
 
-### 2. MSO bot-desktops: unverified against a real container
+### 2. ~~MSO bot-desktops unverified against a real container~~ DONE
 
-`frontend/slices/bot-desktops/` renders, but every screenshot this session used a
-stubbed `/api/v1/desktop/containers` response. The layout, the signed-out state, and
-the polling-stop were all verified in Chromium; **a real Docker box was not**, because
-this host has no `DESKTOP_MODE=docker` running.
+Closed this session. `server/verify-desktop.mts` drives a real box: 42 assertions
+covering the hardening flags read back from the daemon, four displays, four
+websockify ports, a frame that follows the screen, click/key/type/scroll proven
+through xev's event log, drag measured by window geometry, file read/write,
+stop/start/restart, and removal of container + network.
 
-To verify for real:
+Running it found two defects the stub never could (both fixed and pushed):
 
-```bash
-docker build -t grokbot-desktop:latest server/desktop   # in grokbot
-# then run grokbot with DESKTOP_MODE=docker and create one bot
-# then open MSO /bot-desktops signed in as owner
-```
+- **`create`/`start`/`restart` returned before the box was usable.** The entrypoint
+  boots one Xvfb per display, so `:99` answers in ~150ms while `:2`/`:3` need ~1s.
+  A screenshot on `screen-3` right after create failed 5/5 trials. All three verbs
+  now wait for every display; `BoxConfig.displayTimeoutMs` (default 15s) bounds it.
+- **`drag()` never moved anything.** It jumped start→end in one step, which xfwm4
+  reads as a click at the start point. Now interpolated in a single xdotool argv.
+
+Same race existed in MSO (`5bdbf70a`): `screenshotDesktop` after a `start` failed
+3/3 on `:3`, retries only while the display is still booting, 8s bound.
+
+Reproduce: `docker build -t grokbot-desktop:latest server/desktop` then
+`npx tsx server/verify-desktop.mts` from a worktree with `node_modules` linked.
 
 ### 3. MSO server `:4005` serves a stale build
 
-It runs `node scripts/server.mjs --port 4005` from `.next` built at 04:24, which
-predates the bot-desktops slice. To see the app on the live server:
-`bun run build` then restart. A `next dev` on another port works for review and is what
-was used (`npx next dev --port 3111`, in a separate worktree with its own `bun install`
-and a copy of `.env.local` — Next needs real `node_modules`, a symlink breaks Turbopack).
+It runs from `.next` whose BUILD_ID is dated **2026-11-16 08:26**, which predates this
+session's MSO fix (`5bdbf70a`). The bot-desktops routes and page ARE in that build
+(`.next/server/app/api/v1/desktop/{containers,lifecycle,screenshot}` all exist,
+`/bot-desktops` answers 200), so the slice is visible — but the screenshot retry is not.
+
+`npm run build` refuses by design: `scripts/build-safe.sh` exits 73 when a live runtime
+owns the checkout, and pid 2335297 is serving it. The supported path is `mso deploy`
+(quiesce → rebuild → restore). Not run this session; the live server still serves 08:26.
 
 ### 4. Embedding grokbot in MSO is half-wired
 
@@ -158,6 +173,15 @@ Decide whether to delete or rebase. Do not delete someone else's branch without 
   `preview_recording_start` → do real work (navigate, snapshot) → `preview_recording_stop`
   → `ffmpeg -ss 0.6 -i <mp4> -frames:v 1 out.png`. A start/stop with nothing between
   yields a 0.03s video.
+- **A stub can be green while the feature is broken.** The bot-desktop layer had
+  argv-level tests and a stubbed screenshot, and passed. The first run against a real
+  container found that `create` returned before the displays existed and that `drag`
+  could not move a window at all. When the thing under test is a boundary to another
+  process (docker, X, a daemon), one real run is worth more than the argv assertions
+  — and read the assertions back: three of the five initial "failures" in that script
+  were my own test reading the wrong field (`IPAddress` on a user-defined network,
+  `getwindowgeometry` vs `xwininfo` frame origin, grabbing the titlebar vs the body),
+  not defects in the code.
 - **Delegated agents failed 3/3 on provider problems**, not code: missing
   `CONEXTLAB_API_KEY`, a Kiro version rejection, an insufficient-balance 402, and one
   that routed an `opencode/comb-opus5.5` request to Kiro. Two produced usable code
@@ -172,5 +196,5 @@ cd /home/antinrml/projects/mso && git log --oneline -1
 ss -ltnp | grep -E ':5173|:8787|:4005'   # then check each pid's cwd
 ```
 
-Then ask the owner which of items 1, 2, 4 to take first. Item 1 needs a product
+Then ask the owner which of items 1, 3, 4 to take first. Item 1 needs a product
 decision that cannot be guessed.
