@@ -7,9 +7,14 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `5baf043` | `0/0` in sync |
+| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `3d6a23c` | `0/0` in sync |
 | mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `5bdbf70a` | `0/0` in sync |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
+
+Production grokbot runs from `.worktrees/prod` (branch `prod`, user unit
+`grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), now fast-forwarded
+to `3d6a23c`. Before that it sat at `df1e3bb`, 12 commits behind `main` — which is why
+the MSO embed looked "half-wired": the code was never deployed.
 
 Working trees are clean. `npm test` in grokbot: **205 pass, 0 fail**. typecheck 0 errors.
 MSO: `tsc` clean, `lib/desktop` suite 32/32.
@@ -144,15 +149,39 @@ session's MSO fix (`5bdbf70a`). The bot-desktops routes and page ARE in that bui
 owns the checkout, and pid 2335297 is serving it. The supported path is `mso deploy`
 (quiesce → rebuild → restore). Not run this session; the live server still serves 08:26.
 
-### 4. Embedding grokbot in MSO is half-wired
+### 4. ~~Embedding grokbot in MSO~~ DONE
 
-grokbot side is done (`SESSION_COOKIE_SAMESITE=none` + `EMBED_ALLOWED_ORIGINS` +
-`lib/origin-check.ts`, verified: evil origin 403, own origin 200, no-Origin 403).
+Done end to end, and it needed a production deploy first: `prod` was 12 commits behind
+`main` at `df1e3bb`, which predates the embed code entirely (no `lib/origin-check.ts`,
+no `SESSION_COOKIE_SAMESITE`, no 74d207d/9dd0cc8). The previous claim "grokbot side is
+done" was true only of `main`, not of what was serving `grok.antinrml.com`.
 
-MSO side is not: `~/.mso/surface-apps.json` still lists only n8n. To finish, add an
-entry with `placements: ["shell"]`, and note MSO only embeds an **https** origin —
-so grokbot must be served over TLS, and its cookie needs `SameSite=None` (already
-supported). See `docs/MANEF-PORT.md` §"Embedding this app in another site's frame".
+What was done, in order:
+
+1. `better-sqlite3` `.backup()` of `data/grokbot.db` → `~/backups/grokbot/` (verified
+   readable: 21 tables, 2 bots). `.env` copied to `/tmp/opencode/prod.env.backup`.
+2. `git merge --ff-only main` in `.worktrees/prod` (0 unique prod commits, so a pure
+   fast-forward). Now `3d6a23c`.
+3. Appended to `.worktrees/prod/.env`: `SESSION_COOKIE_SAMESITE=none` and
+   `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com`. The pair belongs together; alone
+   either one is a hole.
+4. `npm run build`, `systemctl --user restart grokbot.service`. DB migrated itself:
+   21 → 22 tables (`conversations`), 2 bots intact.
+5. Registered in MSO through its own API, not by editing JSON:
+   `mso mapp shell-save @/tmp/opencode/grokbot-app.json` → id `grokbot`,
+   revision `b4fc5181…`. `shell-list` reports `renderer: iframe`, `mode: embed`,
+   no `reason` — i.e. MSO will frame it.
+6. Verified: evil origin 403 / allowed origin not-403 / no-Origin 403 on prod;
+   no `X-Frame-Options` or `frame-ancestors` to block framing; a real iframe inside
+   `mso.antinrml.com` loaded cross-origin and painted.
+
+Rollback: `git reset --hard df1e3bb` in `.worktrees/prod`, restore `.env.bak-embed`,
+`systemctl --user restart grokbot.service`, then
+`mso mapp shell-save` with `action: "remove"`.
+
+Note MSO's cockpit cookie is host-only (`configuredSessionCookieScope()` returns
+`"host"` in `lib/auth/session-cookie.ts`), so framing grokbot cannot leak an MSO
+session to it.
 
 ### 5. Stale branches nobody owns
 
@@ -196,5 +225,6 @@ cd /home/antinrml/projects/mso && git log --oneline -1
 ss -ltnp | grep -E ':5173|:8787|:4005'   # then check each pid's cwd
 ```
 
-Then ask the owner which of items 1, 3, 4 to take first. Item 1 needs a product
-decision that cannot be guessed.
+Then ask the owner which of items 1 and 3 to take first. Item 1 needs a product
+decision that cannot be guessed. Item 3 is `mso deploy` (quiesce, rebuild, restore) so
+the live `:4005` picks up the screenshot retry; `npm run build` refuses by design.
