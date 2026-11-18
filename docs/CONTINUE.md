@@ -7,16 +7,17 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `3d6a23c` | `0/0` in sync |
-| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `5bdbf70a` | `0/0` in sync |
+| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `0fc9dc6` | `0/0` in sync |
+| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `3f8bcd8e` | `0/0` in sync |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
 Production grokbot runs from `.worktrees/prod` (branch `prod`, user unit
 `grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), now fast-forwarded
-to `3d6a23c`. Before that it sat at `df1e3bb`, 12 commits behind `main` — which is why
+to `0fc9dc6`. Before that it sat at `df1e3bb`, 12 commits behind `main` — which is why
 the MSO embed looked "half-wired": the code was never deployed.
 
-Working trees are clean. `npm test` in grokbot: **205 pass, 0 fail**. typecheck 0 errors.
+Working trees are clean. `npm test` in grokbot: **189 pass, 0 fail** (was 205; the 16
+removed cases belonged to modules that are gone). typecheck 0 errors.
 MSO: `tsc` clean, `lib/desktop` suite 32/32.
 
 **The "host has 0 docker images" claim in the previous version of this file was wrong.**
@@ -183,14 +184,53 @@ Note MSO's cockpit cookie is host-only (`configuredSessionCookieScope()` returns
 `"host"` in `lib/auth/session-cookie.ts`), so framing grokbot cannot leak an MSO
 session to it.
 
-### 5. Stale branches nobody owns
+### 5. Stale branches
 
-- grokbot: `feat/mso-runtime` (8 commits, base `7ee6a7e`, **59 behind** `main`; its unique
-  work — WorkOS auth — is already in `main` as `451aec9`), `feat/staff-only`,
-  `feat/usage-quota`, `fix/ops-hardening`, `harden/rate-limiter`, `prod`.
-- MSO: many `agent/*` branches.
+Cleaned up. What remains is only what is still doing work:
 
-Decide whether to delete or rebase. Do not delete someone else's branch without asking.
+- grokbot local: `main`, `prod` (deploy branch, checked out in `.worktrees/prod`).
+- grokbot remote `manef/`: `main` and `feat/mso-runtime`, kept at the owner's choice.
+  That branch is the **pre-Hermes architecture** — its `agent/loop.ts` calls
+  `xai.responses.create` directly and owns history via `llm_items`/`memory.ts`
+  (`maybeCompact`, `pickSplit`). Nothing in it is "work that was forgotten"; it is the
+  design Hermes replaced. Do not rebase it onto `main` hoping to recover features.
+- MSO: many `agent/*` and `agent/nightly/*` branches, owned by other agents. Untouched.
+
+### 6. Traefik loses the host backend after a Docker network change
+
+**This bit production for ~29 hours and looked exactly like a code regression.**
+
+`grok.antinrml.com` and `mso.antinrml.com` are host processes, so their routers point at
+the `docker_gwbridge` gateway (`http://172.30.1.1:4000` and `:4005`). Traefik had been
+attached to `mso-n8n-isolated` (needed for `http://n8n:5678`), whose subnet is
+`172.30.6.0/24`. Once that attachment existed, `172.30.1.1` stopped matching any local
+interface inside the Traefik container and fell through to the **default route via
+`172.30.6.1`**, which does not forward to the host. Result: every request to those two
+hostnames timed out (504/499), while `n8n.antinrml.com` stayed fine.
+
+Diagnosis that proved it, without root:
+
+```bash
+docker exec dokploy-traefik sh -c 'ip route'          # no 172.30.1.0/24 interface
+docker exec dokploy-traefik sh -c 'wget -qO- --timeout=5 http://172.30.1.1:4000/'
+docker run --rm --network mso-n8n-isolated curlimages/curl:latest \
+  -s -o /dev/null -w '%{http_code}\n' http://172.30.1.1:4000/   # also 000
+```
+
+Fix, one command, additive and reversible:
+
+```bash
+docker network connect docker_gwbridge dokploy-traefik
+```
+
+That gives Traefik an interface on `172.30.1.0/24`, so the router address resolves
+locally again. Verified after: `grok`, `mso` and `n8n` all 200.
+
+**It will come back.** `docker network connect` does not survive a container
+recreation, and Dokploy recreates Traefik on deploy/update. Make it permanent by adding
+`docker_gwbridge` to Traefik's networks in Dokploy's compose, or by pointing the host
+routers at an address Traefik always reaches. Undo with
+`docker network disconnect docker_gwbridge dokploy-traefik`.
 
 ## Session hygiene that mattered
 
