@@ -7,14 +7,18 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `0fc9dc6` | `0/0` in sync |
-| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `3f8bcd8e` | `0/0` in sync |
+| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `853e5d2` | `0/0` in sync |
+| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `fdd0c49f` | `0/0` in sync |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
+`origin` in grokbot is the upstream `nickvasilescu/grokbot-clone`, not a fork this
+machine pushes to; being "ahead 66 / behind 3" of it is expected and not drift.
+
 Production grokbot runs from `.worktrees/prod` (branch `prod`, user unit
-`grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), now fast-forwarded
-to `0fc9dc6`. Before that it sat at `df1e3bb`, 12 commits behind `main` — which is why
-the MSO embed looked "half-wired": the code was never deployed.
+`grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), fast-forwarded to
+`853e5d2` and built 2026-11-18 21:48. Live `:4000` (`pid 790744`) has its cwd in that
+worktree, so what serves is what is committed. Live MSO `:4005` (`pid 2606283`) serves a
+2026-11-19 13:18 build from `projects/mso` itself.
 
 Working trees are clean. `npm test` in grokbot: **189 pass, 0 fail** (was 205; the 16
 removed cases belonged to modules that are gone). typecheck 0 errors.
@@ -88,33 +92,60 @@ Two bug classes found repeatedly and worth continuing to watch for:
 - **Off-by-one in budgets.** The call-transcript budget ignored the `User: ` prefix
   and the omission marker, so the result overshot by both.
 
-## Remaining work, in priority order
+## 2026-11-20: what changed, and why nothing was redeployed
 
-### 1. `server/src/agent/compaction/` has no production caller
+Three "open" items turned out to be already closed, and one real gap was closed.
 
-Verified by exact import grep: only `server/test/history-compaction.test.mjs` imports
-`compaction/context.ts`, `compaction/compaction.ts`, and `compaction/rows.ts`.
+1. **`mso-password` connections restored.** They had been pulled from the live store on
+   2026-11-18 because the then-serving build did not know the provider id and one
+   unknown row makes the whole store unreadable. The live build (2026-11-19 13:18) does
+   know it — `mso integrations connections rahman mso-password` returns rows, and
+   `mso integrations connections <user>` reads cleanly for all seven users. Both rows
+   were re-created through `scripts/seed-mso-password.mts` (the app's own setup path, not
+   a hand-edited JSON), with passwords piped on stdin from the 0600 backup at
+   `~/backups/mso/mso-password-connections-2026-11-18T16-00-00-792Z.json`:
 
-This is deliberate, not an oversight. grokbot sends `conversation: hq-<bot>-g<gen>`
-plus ONE new message to Hermes; it never sends history. The model's real history is
-Hermes' business (`docs/ARCHITECTURE.md:51`), and the app keeps only what it shows.
-So there is nothing in the turn path for a compaction to compact.
+   | connection | host | password | expiresAt |
+   |---|---|---|---|
+   | `rahman/mso-password/mso-antinrml` | `mso.antinrml.com` | stored, 10 chars | `0` |
+   | `rahman/mso-password/mso-rahmanef` | `mso.rahmanef.com` | stored, 11 chars | `0` |
 
-The one place a digest IS sent to a model is `summarizeCall` in `server/src/voice.ts`,
-and that is already solved by `server/src/agent/call-transcript.ts` (keeps the opening,
-drops the oldest middle, marks the gap).
+   `verified: false, configurationOnly: true` is the correct answer here: MSO must not
+   sign in to another installation to "verify" a recorded password (`additional-doctor.ts`
+   returns `null` for this provider on purpose). A snapshot of the store taken before the
+   write sits at `/tmp/opencode/infra-before-restore.json` (0600, temporary).
 
-**Do not wire `compactRows` into `agent/loop.ts` to "use" it.** That would pretend the
-app owns conversation history. Two honest options:
+   `npx tsx` cannot run in `projects/mso` — npm fails with `EOVERRIDE` on a `postcss`
+   override, so the script was run with `bun run`. That is a pre-existing npm/bun
+   lockfile disagreement, not something this session introduced.
 
-- **(a)** If the intent is for the app to own history (needed for cross-engine resume,
-  transcript search, or a real compaction of what is displayed), that is a product
-  decision. Start by reading `store.ts` `listRows`/`appendRow` and deciding whether the
-  app should build an LLM input, which it currently does not.
-- **(b)** If Hermes keeps owning it, delete `compaction/` and its test. Dead, tested
-  code is still dead code, and keeping it implies a wiring that will never exist.
+2. **Traefik `docker_gwbridge` guard.** `bin/traefik-gwbridge-ensure.sh` plus a 5-minute
+   crontab entry. Details in item 6.
 
-Ask the owner which. Do not guess.
+3. **Docs corrected, no code shipped.** Items 1, 3 and 4 in the list below were already
+   done before this session started; the file said otherwise. Nothing was rebuilt or
+   redeployed, because nothing in either serving build was stale.
+
+## Status of the previously-open items
+
+### 1. ~~`server/src/agent/compaction/` has no production caller~~ DONE
+
+Resolved by deletion (`947c7ae`): `compaction/` and its test are gone, because Hermes
+owns conversation history and the app keeps only what it shows. `npm test` went 205 →
+189 cases; the 16 removed cases were the ones that tested that module.
+
+The reasoning is kept as the decision record:
+
+- grokbot sends `conversation: hq-<bot>-g<gen>` plus ONE new message to Hermes; it never
+  sends history. The model's real history is Hermes' business (`docs/ARCHITECTURE.md:51`),
+  and the app keeps only what it shows, so nothing in the turn path needs compacting.
+- The one place a digest IS sent to a model is `summarizeCall` in `server/src/voice.ts`,
+  and that is already solved by `server/src/agent/call-transcript.ts` (keeps the opening,
+  drops the oldest middle, marks the gap).
+
+Do not reintroduce a compaction module unless the app starts owning history (cross-engine
+resume, transcript search, or compacting what it displays). Wiring `compactRows` into
+`agent/loop.ts` to "use" it would pretend the app owns history it does not.
 
 ### 2. ~~MSO bot-desktops unverified against a real container~~ DONE
 
@@ -139,16 +170,16 @@ Same race existed in MSO (`5bdbf70a`): `screenshotDesktop` after a `start` faile
 Reproduce: `docker build -t grokbot-desktop:latest server/desktop` then
 `npx tsx server/verify-desktop.mts` from a worktree with `node_modules` linked.
 
-### 3. MSO server `:4005` serves a stale build
+### 3. ~~MSO server `:4005` serves a stale build~~ DONE
 
-It runs from `.next` whose BUILD_ID is dated **2026-11-16 08:26**, which predates this
-session's MSO fix (`5bdbf70a`). The bot-desktops routes and page ARE in that build
-(`.next/server/app/api/v1/desktop/{containers,lifecycle,screenshot}` all exist,
-`/bot-desktops` answers 200), so the slice is visible — but the screenshot retry is not.
+Self-resolved. `mso-self-update.service --rebuild-only --channel=main` ran on
+2026-11-19 13:06 and finished 13:19 (journal: 17m30s CPU). Live `.next/BUILD_ID` and the
+desktop chunk now carry 2026-11-19 13:18 timestamps, and the chunk contains
+`SCREEN_BOOT_MS = 8e3`, so the screenshot retry (`5bdbf70a`) is in the serving build.
+`/api/v1/desktop/containers` answers 401 (auth required), not 404 (missing route).
 
-`npm run build` refuses by design: `scripts/build-safe.sh` exits 73 when a live runtime
-owns the checkout, and pid 2335297 is serving it. The supported path is `mso deploy`
-(quiesce → rebuild → restore). Not run this session; the live server still serves 08:26.
+The earlier premise — that `npm run build` refusing meant nothing could ship — was
+wrong: `mso` has its own out-of-tree updater, and it is the supported path.
 
 ### 4. ~~Embedding grokbot in MSO~~ DONE
 
@@ -232,6 +263,23 @@ recreation, and Dokploy recreates Traefik on deploy/update. Make it permanent by
 routers at an address Traefik always reaches. Undo with
 `docker network disconnect docker_gwbridge dokploy-traefik`.
 
+**Runtime half is in place** (2026-11-20): `/home/antinrml/bin/traefik-gwbridge-ensure.sh`
+runs every 5 minutes from `antinrml`'s crontab and reattaches only when the attachment is
+missing. It is a no-op when attached, exits 0 when the container is absent or stopped,
+and treats "already exists in network" as success so it cannot fight Dokploy's own
+attach. Tested against a scratch container across all four states (attached,
+not-attached, missing, stopped).
+
+The permanent fix still needs root: `/etc/dokploy` is root-owned and this account has no
+passwordless sudo beyond a fixed command list. Until someone with root adds the network
+to Traefik's compose, expect up to a 5-minute window after each Dokploy Traefik
+recreation where grok/mso time out. To verify the guard is alive:
+
+```bash
+crontab -l | grep gwbridge            # schedule present
+docker exec dokploy-traefik sh -c 'wget -q -O /dev/null http://172.30.1.1:4000/'  # exit 0
+```
+
 ## Session hygiene that mattered
 
 - **A dev server can outlive its worktree.** `readlink /proc/<pid>/cwd` showed
@@ -263,8 +311,9 @@ routers at an address Traefik always reaches. Undo with
 cd /home/antinrml/projects/grokbot-clone && git log --oneline -1 && npm test
 cd /home/antinrml/projects/mso && git log --oneline -1
 ss -ltnp | grep -E ':5173|:8787|:4005'   # then check each pid's cwd
+docker exec dokploy-traefik sh -c 'wget -q -O /dev/null http://172.30.1.1:4000/'; echo $?  # 0 = host backend reachable
 ```
 
-Then ask the owner which of items 1 and 3 to take first. Item 1 needs a product
-decision that cannot be guessed. Item 3 is `mso deploy` (quiesce, rebuild, restore) so
-the live `:4005` picks up the screenshot retry; `npm run build` refuses by design.
+Then work item 6's permanent fix if root access is available, or pick the next real
+feature. Items 1, 3, 4 and 5 are closed; item 2 is closed with a real-container script
+to reproduce. Nothing here needs a product decision right now.
