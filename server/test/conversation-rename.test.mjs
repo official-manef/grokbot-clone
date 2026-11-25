@@ -1,12 +1,21 @@
 /**
- * Renaming a conversation, and the rule that an empty name restores the automatic one.
+ * Renaming a conversation, asserted at the route the browser actually calls.
  *
- * This is the server half of the rename UI. Two behaviours matter and are easy to get
- * wrong: a rename must not create a second row for the same conversation, and
- * clearing the title has to bring the fallback back rather than leaving the list
- * showing an empty string.
+ * This file used to import `setConversationTitle` and re-implement the PATCH
+ * handler's trim-and-delete in two local helpers (`applyRename`, `clear`). That
+ * made it a test of its own copy: removing `body.title.trim()` from `routes.ts`, or
+ * dropping the `DELETE` that the clear branch performs, left all seven cases green.
+ * Both were verified by mutation against this tree before the rewrite.
  *
- * Runs against a throwaway database.
+ * Now every case drives `api.request('/bots/:id/conversations/:generation')`, the
+ * same entry the list UI uses, in a child process (env.ts and the db handle resolve
+ * once per process). Fixtures are only the bot and the `rows` the fallback title
+ * reads; the decide-and-store path is the route's.
+ *
+ * Not covered here: the browser UI (inline input, Esc cancels, F2). That is
+ * `web/` behaviour and is checked by hand; see the note at the bottom of
+ * `docs/CONTINUE.md`. What a route bug could do to it — a blank title, a second
+ * row — is what this file pins down.
  *
  *   node --test server/test/conversation-rename.test.mjs
  */
@@ -14,96 +23,124 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtempSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-process.env.DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), 'hq-rename-')), 'test.db');
-process.env.SESSION_SECRET = 'test-secret-not-a-real-one';
-
-const { db } = await import('../src/db.ts');
-const { firstExchange, getConversation, listConversations, setConversationTitle } = await import('../src/conversations.ts');
-const { fallbackTitle } = await import('../src/agent/session-title.ts');
-
-const BOT = 'bot_rename';
-
-db.prepare('INSERT OR IGNORE INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run('u1', 'u@example.com', 'Sam', Date.now());
-db.prepare('INSERT OR IGNORE INTO bots(id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)').run(BOT, 'u1', 'Doug', Date.now(), Date.now());
-
-function addMessage(generation, seq, role, text) {
-  db.prepare('INSERT INTO rows(bot_id,generation,seq,updated_seq,kind,body,created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(BOT, generation, seq, seq, 'message', JSON.stringify({ type: 'message', role, text }), Date.now());
-}
-
-/** What the PATCH route does for a non-empty title. */
-const rename = (generation, title) => setConversationTitle(BOT, generation, title, 'model');
-
-/** What the PATCH route does for an empty title: drop the row, fall back. */
-const clear = (generation) => {
-  db.prepare('DELETE FROM conversations WHERE bot_id=? AND generation=?').run(BOT, generation);
-  const { user } = firstExchange(BOT, generation);
-  return user ? fallbackTitle(user) : 'New chat';
-};
-
-addMessage(1, 1, 'user', 'how do I deploy the payments service to staging');
-addMessage(1, 2, 'assistant', 'run the pack script');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const probe = path.join(here, '_conversation-rename-probe.mjs');
 
 /**
- * What the PATCH route does with a title, after the trim it performs.
- *
- * Extracted here so the test asserts the ROUTE's decision rather than restating it:
- * `routes.ts` trims, and an empty result deletes the row so the fallback takes over.
- * A row with an empty title would render as a blank line in the list.
+ * Run the probe in its own process. The env is the minimum that boots `routes.ts`
+ * without a model, a desktop, or a network call; `ALLOWED_EMAIL_DOMAINS` is what
+ * lets the two sign-in calls through the staff wall.
  */
-function applyRename(generation, rawTitle) {
-  const title = String(rawTitle).trim();
-  if (!title) return { title: clear(generation), source: 'fallback' };
-  const saved = rename(generation, title);
-  return { title: saved.title, source: saved.source };
+function probeOnce() {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      ['--import', 'tsx', probe],
+      {
+        cwd: path.join(here, '..'),
+        env: {
+          ...process.env,
+          SESSION_SECRET: 'test-secret',
+          DB_PATH: path.join(os.tmpdir(), `grokbot-rename-probe-${process.pid}-${Date.now()}.db`),
+          ALLOWED_EMAIL_DOMAINS: 'antinrml.com',
+          ALLOWED_EMAILS: '',
+          AUTH_PASSWORD: '',
+          AUTH_PASSWORD_HASH: '',
+          AUTH_PROVIDER: '',
+          DEV_LOGIN: '',
+          DESKTOP_MODE: 'disabled',
+          HERMES_BIN: '/bin/false',
+          GROKBOT_NO_SCHEDULER: '1',
+          XAI_API_KEY: 'test-key',
+          COMPOSIO_API_KEY: '',
+          WORKOS_API_KEY: '',
+          WORKOS_CLIENT_ID: '',
+          APP_URL: 'http://localhost:5173',
+          SERVER_URL: 'http://localhost:8787',
+          NODE_ENV: '',
+          TRUSTED_PROXY_HOPS: '1',
+        },
+        timeout: 120_000,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const marked = stdout.split('\n').find((l) => l.startsWith('@@PROBE@@'));
+        if (!marked) return reject(new Error(`probe printed no result\nstdout: ${stdout.slice(-800)}\nstderr: ${stderr.slice(-800)}\n${error ?? ''}`));
+        try {
+          resolve(JSON.parse(marked.slice('@@PROBE@@'.length)));
+        } catch (e) {
+          reject(new Error(`probe result was not JSON: ${marked.slice(0, 200)}`));
+        }
+      },
+    );
+  });
 }
 
-test('a rename is stored with the model as its source', () => {
-  const r = applyRename(1, 'Payments deploy');
-  assert.equal(r.title, 'Payments deploy');
-  assert.equal(r.source, 'model', 'a human-typed name is not marked as a fallback');
-  assert.equal(getConversation(BOT, 1).title, 'Payments deploy');
+// One probe run: it is a single process boot, and the cases are ordered inside it
+// (a rename needs the row a previous case left). Splitting by test would boot N times.
+const result = await probeOnce();
+const c = result.cases;
+
+test('a rename is stored, and attributed to the person rather than the fallback', () => {
+  assert.equal(c.rename.status, 200);
+  assert.equal(c.rename.body.title, 'Payments deploy');
+  assert.equal(c.rename.body.source, 'model', 'a human-typed name is not marked as a fallback');
+  assert.deepEqual(c.renameRow, { title: 'Payments deploy', source: 'model' });
 });
 
-test('renaming twice replaces rather than duplicates', () => {
-  applyRename(1, 'Payments deploy v2');
-  assert.equal(listConversations(BOT).filter((c) => c.generation === 1).length, 1);
-  assert.equal(getConversation(BOT, 1).title, 'Payments deploy v2');
+test('renaming twice replaces rather than duplicating the row', () => {
+  assert.equal(c.secondRenameRows, 1, 'one conversation must not accumulate rows');
+  assert.equal(c.secondRenameRow.title, 'Payments deploy v2');
 });
 
-test('clearing a title brings the automatic name back, not an empty row', () => {
-  const r = applyRename(1, '');
-  assert.equal(getConversation(BOT, 1), null, 'no stored row means the fallback is used');
-  assert.equal(r.source, 'fallback');
-  assert.equal(r.title, 'How do I deploy the payments service to staging', 'the first message names it again');
+test('whitespace-only takes the clearing branch, so no blank title is stored', () => {
+  assert.equal(c.whitespace.status, 200);
+  assert.equal(c.whitespace.body.source, 'fallback');
+  assert.equal(c.whitespace.body.title, 'How do I deploy the payments service to staging');
+  assert.equal(
+    c.whitespaceRow,
+    undefined,
+    'the route must DELETE the row; a surviving row means the list shows the old name after a clear',
+  );
 });
 
-test('a cleared title comes back from the list endpoint as a fallback, never as empty', () => {
-  // Mirrors what GET /conversations builds when a generation has no stored row.
-  const { user } = firstExchange(BOT, 1);
-  const title = user ? fallbackTitle(user) : 'New chat';
-  assert.ok(title.length > 0);
-  assert.doesNotMatch(title, /^\s*$/);
+test('an empty title takes the same clearing branch', () => {
+  assert.equal(c.empty.body.source, 'fallback');
+  assert.equal(c.empty.body.title, 'How do I deploy the payments service to staging');
+  assert.equal(c.emptyRow, undefined);
 });
 
-test('whitespace-only input takes the clearing branch, not the rename branch', () => {
-  applyRename(1, 'Real name');
-  const r = applyRename(1, '   ');
-  assert.equal(getConversation(BOT, 1), null, 'whitespace must clear, not store a blank title');
-  assert.equal(r.source, 'fallback');
+test('a non-string title is refused, not coerced into the row', () => {
+  assert.equal(c.notAString.status, 400);
+  assert.equal(c.missingTitle.status, 400);
 });
 
-test('a very long rename is capped, so the row cannot break the layout', () => {
-  applyRename(1, 'r'.repeat(400));
-  assert.equal(getConversation(BOT, 1).title.length, 120);
+test('a very long rename is capped by the route, so the row cannot break the layout', () => {
+  assert.equal(c.capRow.title.length, 120);
+  assert.equal(c.capRow.source, 'model');
 });
 
-test('renaming one conversation does not touch another', () => {
-  addMessage(2, 1, 'user', 'why is the nightly build red');
-  applyRename(1, 'Only the first');
-  applyRename(2, 'Only the second');
-  assert.equal(getConversation(BOT, 1).title, 'Only the first');
-  assert.equal(getConversation(BOT, 2).title, 'Only the second');
+test('a generation the bot does not have is a 404, not a place to plant a row', () => {
+  assert.equal(c.unknownGeneration.status, 404);
+});
+
+test('renaming one conversation does not touch another bot', () => {
+  assert.deepEqual(c.isolation.first, { title: 'Only the first', source: 'model' });
+  assert.deepEqual(c.isolation.second, { title: 'Only the second', source: 'model' });
+});
+
+test("another account cannot rename a bot it does not own", () => {
+  assert.equal(c.foreignBot.status, 404, 'ownership must be checked before the write, and must look like absence');
+});
+
+test('the list endpoint never surfaces a blank title after a clear', () => {
+  assert.equal(c.list.status, 200);
+  const [row] = c.list.body.conversations;
+  assert.ok(row, 'the conversation must still be listed');
+  assert.equal(row.title, 'How do I deploy the payments service to staging');
+  assert.equal(row.source, 'fallback');
+  assert.doesNotMatch(row.title, /^\s*$/);
 });
