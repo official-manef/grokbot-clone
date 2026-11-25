@@ -49,6 +49,42 @@ const LS_SIDEBAR = 'grokbot.sidebarCollapsed';
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 
+/**
+ * The same breakpoint the stylesheet uses (`chat.css`, `@media (max-width: 767px)`).
+ * One number, two places, which is why it is named rather than repeated inline.
+ */
+const NARROW_QUERY = '(max-width: 767px)';
+const isNarrowViewport = () => {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(NARROW_QUERY).matches
+      : false;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Layout defaults, with two different answers for two different screens.
+ *
+ * On a phone the sidebar is an overlay 350px wide and details is a full-width sheet,
+ * so opening both over the chat means a first visit needs two dismissals before the
+ * chat pill — and the conversation history behind it — can be pressed at all. Neither
+ * of those overlays is the thing a person arrives to do.
+ *
+ * A stored preference always wins; this only decides what "no preference yet" means.
+ * Desktop keeps exactly the old behaviour (sidebar open, details open), which is also
+ * what a non-browser import gets, so tests and the server see the desktop defaults.
+ *
+ * `ponytail:` this reads the viewport once at module init. A desktop window dragged
+ * narrow keeps its open panels until reload — the overlays have their own controls,
+ * so that is recoverable, and reacting to every resize would fight a choice the
+ * person just made. Add a `matchMedia` listener if resize becomes a real complaint.
+ */
+const narrowAtBoot = isNarrowViewport();
+const storedDetails = lsGet(LS_DETAILS);
+const storedSidebar = lsGet(LS_SIDEBAR);
+
 export const useStore = create<State>((set, get) => ({
   user: null,
   devLogin: false,
@@ -62,8 +98,11 @@ export const useStore = create<State>((set, get) => ({
   computer: null,
   connectionsVersion: 0,
   sseConnected: false,
-  detailsOpen: lsGet(LS_DETAILS) !== '0',
-  sidebarCollapsed: lsGet(LS_SIDEBAR) === '1',
+  // Details and the sidebar both default open on a desktop window; on a phone they
+  // default closed so the chat is what a first visit lands on. A stored value from
+  // an earlier visit overrides either default, in both directions.
+  detailsOpen: storedDetails !== null ? storedDetails === '1' : !narrowAtBoot,
+  sidebarCollapsed: storedSidebar !== null ? storedSidebar === '1' : narrowAtBoot,
   modal: null,
   viewerOpen: false,
   viewerMode: 'watch',
