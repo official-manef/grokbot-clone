@@ -63,12 +63,26 @@ async function openList(page) {
 }
 
 /** One full pass of the rename behaviours at a given viewport, reusing the session. */
-async function runFlow(page, label, { tapMode = false } = {}) {
+async function runFlow(page, label, { tapMode = false, narrow = false } = {}) {
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+
+  // On a phone both overlays start open: details is a full-screen sheet and the
+  // sidebar is 350px wide on a 390px screen, so each covers the header. A real user
+  // closes them with their own on-screen controls, which is exactly what this does —
+  // no localStorage presets, so first-run reachability is what gets tested.
+  if (narrow) {
+    // Order matters: the sidebar overlay is above the details sheet, and its collapse
+    // control is the only header control a phone user can reach first.
+    const collapse = page.getByRole('button', { name: 'Collapse sidebar' });
+    if (await collapse.isVisible().catch(() => false)) { await collapse.tap(); await page.waitForTimeout(400); }
+    const closeDetails = page.getByRole('button', { name: 'Close details' });
+    if (await closeDetails.isVisible().catch(() => false)) { await closeDetails.tap(); await page.waitForTimeout(350); }
+  }
+
   await openList(page);
 
   const row = page.locator('.menu__item--row').first();
@@ -255,17 +269,15 @@ if (session.status !== 200) {
   await context.close();
 }
 
-// ---------- mobile ----------
-{
-  // A coarse pointer with no hover, which is the property that broke the pencil.
-  // Width is 900 rather than a phone's 390 because `.chat` is `min-width: 424px` and
-  // the sidebar is 350px fixed: below ~774px the message pane starts off-screen and
-  // the conversation list renders past the right edge with nothing to scroll. That
-  // overflow is pre-existing and out of scope here, so this exercises the touch
-  // behaviour at a width where the app is actually usable, and the reachability
-  // check inside runFlow reports the narrow-width failure rather than hiding it.
+// ---------- narrow touch: 390 then 360 ----------
+// A coarse pointer with no hover, at real phone widths. These used to fail outright:
+// `.chat` was `min-width: 424px` and the sidebar 350px fixed, so the pane began at
+// x=133 and the conversation list ended at x=586 on a 390px screen — off-screen and
+// unscrollable, because body is overflow:hidden. The narrow-screen rules in chat.css
+// fix that; these widths are what keeps them honest.
+for (const width of [390, 360]) {
   const context = await browser.newContext({
-    viewport: { width: 900, height: 844 },
+    viewport: { width, height: 844 },
     deviceScaleFactor: 3,
     isMobile: true,
     hasTouch: true,
@@ -273,7 +285,7 @@ if (session.status !== 200) {
   });
   await context.addCookies(session.cookies);
   const page = await context.newPage();
-  await runFlow(page, 'mobile', { tapMode: true });
+  await runFlow(page, `mobile-${width}`, { tapMode: true, narrow: true });
 
   // The pencil's size/visibility is already asserted inside runFlow; no second copy.
   await page.screenshot({ path: '/tmp/opencode/preview/qa-mobile.png', fullPage: true });
