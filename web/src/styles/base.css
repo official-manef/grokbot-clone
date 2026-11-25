@@ -133,9 +133,20 @@ a { color: inherit; }
 .menu__rename {
   flex: none; padding: 0 6px; margin-left: 4px; background: none; border: 0; cursor: pointer;
   color: var(--color-text-tertiary); font-size: 12px; line-height: 1; opacity: 0;
+  /* The glyph is 12px tall, so the hit area has to be grown independently of it.
+     24x24 is the WCAG 2.5.8 minimum; below that a thumb misses the target. */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; min-height: 24px;
 }
 .menu__item--row:hover .menu__rename,
 .menu__rename:focus-visible { opacity: 1; }
+/* Reveal-on-hover needs a pointer that can hover. A touch screen has none, so the
+   pencil would stay at opacity 0 forever: invisible, yet still hit-testable — the
+   worst combination, because the row looks like it only opens. */
+@media (pointer: coarse) {
+  .menu__rename { opacity: 1; }
+  .menu__rename:disabled { opacity: 0; }
+}
 .menu__rename:hover { color: var(--color-text-primary); }
 .menu__rename:disabled { cursor: default; opacity: 0; }
 .menu__item.is-editing { align-items: center; }

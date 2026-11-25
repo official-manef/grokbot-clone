@@ -116,8 +116,38 @@ function Row({
   const [draft, setDraft] = useState(c.title);
   const [saving, setSaving] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  /**
+   * Where focus goes when editing ends.
+   *
+   * The pencil unmounts while editing and remounts after, so the browser drops
+   * focus to <body>. For a keyboard user that means the next Tab restarts at the
+   * top of the document, which is why the F2 shortcut was useless in practice.
+   * Focus is returned to the pencil, not to the row: the row is not focusable, and
+   * adding a tabIndex there would create a second tab stop for one action.
+   *
+   * Only restore when focus was inside this row to begin with, so closing an
+   * editor that was opened by a click elsewhere cannot steal the caret.
+   */
+  const pencil = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
 
-  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
+  useEffect(() => {
+    if (editing) input.current?.select();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing && restoreFocus.current) {
+      restoreFocus.current = false;
+      pencil.current?.focus();
+    }
+  }, [editing]);
+
+  /** Open the editor, remembering that focus belongs back on the pencil afterwards. */
+  const beginEdit = () => {
+    restoreFocus.current = true;
+    setDraft(c.title);
+    setEditing(true);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -157,7 +187,10 @@ function Row({
     <div
       className={`menu__item menu__item--row${isCurrent ? ' is-current' : ''}`}
       aria-current={isCurrent ? 'true' : undefined}
-      onKeyDown={(e) => { if (e.key === 'F2') { setDraft(c.title); setEditing(true); } }}
+      // F2 arrives here by bubbling from the two buttons below, which are the
+      // row's real tab stops. The row itself is deliberately not focusable: one
+      // tabIndex here would add a third stop for an action the pencil already does.
+      onKeyDown={(e) => { if (e.key === 'F2') { e.preventDefault(); beginEdit(); } }}
     >
       <button
         type="button"
@@ -168,12 +201,13 @@ function Row({
         <span className="menu__item-title">{c.title || `Chat ${c.generation}`}</span>
       </button>
       <button
+        ref={pencil}
         type="button"
         className="menu__rename"
         aria-label={`Rename ${c.title || `chat ${c.generation}`}`}
         title="Rename"
         disabled={disabled || saving}
-        onClick={() => { setDraft(c.title); setEditing(true); }}
+        onClick={beginEdit}
       >
         ✎
       </button>
