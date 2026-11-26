@@ -19,8 +19,12 @@ import { mkdtempSync } from 'node:fs';
 process.env.DB_PATH = path.join(mkdtempSync(path.join(os.tmpdir(), 'hq-titles-')), 'test.db');
 process.env.SESSION_SECRET = 'test-secret-not-a-real-one';
 // No endpoint: the fallback path is the one that has to work everywhere.
+// `env.ts` aliases XAI_* onto LLM_*, so scrubbing only LLM_* leaves a dev shell's
+// XAI_BASE_URL+XAI_API_KEY looking like a configured endpoint.
 delete process.env.LLM_BASE_URL;
 delete process.env.LLM_API_KEY;
+delete process.env.XAI_BASE_URL;
+delete process.env.XAI_API_KEY;
 
 const { db } = await import('../src/db.ts');
 const { getConversation, setConversationTitle } = await import('../src/conversations.ts');
