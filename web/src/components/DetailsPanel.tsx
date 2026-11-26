@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Routine } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { api, openPopup } from '../lib/api';
@@ -12,6 +12,7 @@ import { VoiceSettings } from './VoiceSettings';
 import { ComputerScreen, type ScreenMode } from './ComputerViewer';
 import { EngineSettings } from './EngineSettings';
 import { MembersCard } from './MembersCard';
+import { useOverlayDismiss, useReturnFocusOnUnmount } from './overlay';
 import { useConfigUI } from '../configStore';
 import { Glyph } from './config/glyphs';
 import { LibraryTab } from './config/LibraryTab';
@@ -53,10 +54,28 @@ export function DetailsPanel() {
   const computer = useStore((s) => s.computer);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const set = useStore((s) => s.set);
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
   const hasDesktop = useCapability('desktop');
   const canConnect = useCapability('integrations');
   const [tab, setTab] = useState<'activity' | 'tasks' | 'library'>('activity');
   const [hideSuggested, setHideSuggested] = useState(() => { try { return localStorage.getItem('grokbot.hideSuggested') === '1'; } catch { return false; } });
+
+  // On a phone this sheet covers the chat, so Escape must close it — but only when the
+  // sidebar (z-index 30, above this panel's 20) is not also open, or one press would
+  // close both and the person would not know which one they dismissed. The computer
+  // viewer opens from inside this panel and owns Escape while it is up.
+  const closeDetails = useCallback(() => set({ detailsOpen: false }), [set]);
+  useOverlayDismiss(
+    !!bot,
+    closeDetails,
+    '[aria-label="Show details"]',
+    useCallback(() => sidebarCollapsed && !viewerOpen, [sidebarCollapsed, viewerOpen]),
+  );
+  // "Close details" unmounts with the panel, so a click on it drops focus on <body>.
+  // Whichever route closed us — that button, Escape, or the shortcut — focus goes to
+  // "Show details", which the parent renders on the next frame.
+  useReturnFocusOnUnmount(!!bot, '[aria-label="Show details"]');
+
   if (!bot) return null;
 
   const openComputer = (mode: ScreenMode) => set({ viewerOpen: true, viewerMode: mode, viewerHint: null });

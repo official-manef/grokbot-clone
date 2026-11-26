@@ -8,6 +8,7 @@ import { api } from '../lib/api';
 import { useCapability } from '../lib/capabilities';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
+import { useOverlayDismiss, useReturnFocusOnUnmount } from './overlay';
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -63,6 +64,12 @@ export function Sidebar() {
   const canConnect = useCapability('integrations');
   const [accountMenu, setAccountMenu] = useState(false);
   const logout = async () => { await api.logout().catch(() => {}); location.reload(); };
+
+  // On a phone the expanded sidebar is an overlay at z-index 30, above the details
+  // sheet (20), so it is the one Escape closes first. On a desktop it is a column.
+  const collapse = useCallback(() => set({ sidebarCollapsed: true }), [set]);
+  useOverlayDismiss(!collapsed, collapse, '[aria-label="Expand sidebar"]');
+  useReturnFocusOnUnmount(!collapsed, '[aria-label="Expand sidebar"]');
 
   const primary = bots.find((b) => b.isPrimary);
   const others = bots.filter((b) => !b.isPrimary).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
