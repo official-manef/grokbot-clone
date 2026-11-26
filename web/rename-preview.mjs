@@ -12,6 +12,7 @@
  *   PREVIEW=http://127.0.0.1:5199 node web/rename-preview.mjs
  */
 import { chromium } from 'playwright';
+import { gotoApp, reloadApp } from './app-ready.mjs';
 
 const BASE = process.env.PREVIEW ?? 'http://127.0.0.1:5199';
 const EMAIL = process.env.PREVIEW_EMAIL ?? 'artist@antinrml.com';
@@ -43,7 +44,7 @@ const signedIn = await page.evaluate(async (email) => {
 }, EMAIL);
 check('dev sign-in reaches the app session', signedIn === 200, `status ${signedIn}`);
 
-await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+await gotoApp(page, BASE);
 
 // The list is not on the main screen: it opens from the chat pill's menu
 // ("Conversation history"), so reach it the way a person does rather than
@@ -127,7 +128,7 @@ await page.screenshot({ path: '/tmp/opencode/preview/ui-after-rename.png', fullP
 
 // 6. The change survives a reload: it was stored, not just held in React state.
 //    The menu closes on reload, so reopen it before reading the row back.
-await page.reload({ waitUntil: 'networkidle' });
+await reloadApp(page);
 await page.locator('.chat__pill').click();
 await page.getByText('Conversation history', { exact: true }).first().click();
 const reloadedTitle = page.locator('.menu__item-title').first();

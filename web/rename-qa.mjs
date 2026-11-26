@@ -17,6 +17,7 @@
  *   PREVIEW=http://127.0.0.1:5199 node web/rename-qa.mjs
  */
 import { chromium } from 'playwright';
+import { gotoApp, reloadApp } from './app-ready.mjs';
 
 const BASE = process.env.PREVIEW ?? 'http://127.0.0.1:5199';
 const EMAIL = process.env.PREVIEW_EMAIL ?? 'artist@antinrml.com';
@@ -68,7 +69,7 @@ async function runFlow(page, label, { tapMode = false, narrow = false } = {}) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
 
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
 
   // On a phone both overlays start open: details is a full-screen sheet and the
   // sidebar is 350px wide on a 390px screen, so each covers the header. A real user
@@ -159,7 +160,7 @@ async function runFlow(page, label, { tapMode = false, narrow = false } = {}) {
   );
 
   // --- the rename persisted --------------------------------------------------
-  await page.reload({ waitUntil: 'networkidle' });
+  await reloadApp(page);
   await openList(page);
   const afterReload = (await page.locator('.menu__item-title').first().innerText()).trim();
   check(`[${label}] the cleared name survives a reload`, afterReload === afterClear, afterReload);

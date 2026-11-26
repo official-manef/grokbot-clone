@@ -25,3 +25,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The three web/mobile-*.mjs suites are not matched by `npm test` (which globs
+      # server/test/*.test.mjs), so they ran by hand and never in CI. They need a
+      # browser and a served build, which is why they are a separate step: Playwright's
+      # Chromium, then a throwaway loopback server that also serves web/dist.
+      # `playwright` is hoisted to the root by npm workspaces, so no cwd override.
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/mobile-suites.mjs
