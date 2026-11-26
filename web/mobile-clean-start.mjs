@@ -15,6 +15,7 @@
  *   PREVIEW=http://127.0.0.1:5199 QA_EXPECT=red node web/mobile-clean-start.mjs
  */
 import { chromium } from 'playwright';
+import { gotoApp } from './app-ready.mjs';
 
 const BASE = process.env.PREVIEW ?? 'http://127.0.0.1:5199';
 const EMAIL = process.env.PREVIEW_EMAIL ?? 'artist@antinrml.com';
@@ -82,7 +83,7 @@ async function cleanStart(width, label) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
 
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
 
   // Prove the storage really is clean; otherwise this whole file tests nothing new.
   const storage = await page.evaluate(() => ({
@@ -167,7 +168,15 @@ async function cleanStart(width, label) {
   await context.close();
 }
 
-for (const width of [390, 360]) await cleanStart(width, `mobile-${width}`);
+// Same guard as in mobile-overlays: one bad navigation is a FAIL for that viewport,
+// not a reason to skip every case after it.
+for (const width of [390, 360]) {
+  try {
+    await cleanStart(width, `mobile-${width}`);
+  } catch (e) {
+    check(`[mobile-${width}] the phone suite ran to the end`, false, String(e).split('\n')[0]);
+  }
+}
 
 await browser.close();
 

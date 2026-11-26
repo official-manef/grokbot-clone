@@ -22,6 +22,7 @@
  *   PREVIEW=http://127.0.0.1:5199 QA_EXPECT=red node web/mobile-overlays.test.mjs
  */
 import { chromium } from 'playwright';
+import { gotoApp } from './app-ready.mjs';
 
 const BASE = process.env.PREVIEW ?? 'http://127.0.0.1:5199';
 const EMAIL = process.env.PREVIEW_EMAIL ?? 'artist@antinrml.com';
@@ -106,10 +107,10 @@ const pressable = (page, selector) => page.evaluate((sel) => {
 }, selector);
 
 // ---------- 0. a session is genuinely required (no session leak into auth) ----------
-{
+try {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   const anon = await page.evaluate(async () => {
     const bots = await fetch('/api/bots').then((r) => r.status).catch(() => 'error');
     const rows = await fetch('/api/bots/qa-bot/rows').then((r) => r.status).catch(() => 'error');
@@ -119,6 +120,8 @@ const pressable = (page, selector) => page.evaluate((sel) => {
   check('no session: /api/bots/:id/rows refuses', anon.rows === 401, `status ${anon.rows}`);
   check('no session: the chat shell is not rendered', anon.hasComposer === false);
   await ctx.close();
+} catch (e) {
+  check('no session: the anonymous shell loaded', false, String(e).split('\n')[0]);
 }
 
 const session = await signInOnce();
@@ -135,7 +138,7 @@ async function fresh(width, errors) {
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   return { context, page };
 }
 
@@ -254,14 +257,23 @@ async function runPhone(width, label) {
 
   check(`[${label}] no console or page errors across all cases`, errors.length === 0, errors.slice(0, 2).join(' | '));
 }
-for (const [width, label] of [[390, 'mobile-390'], [360, 'mobile-360']]) await runPhone(width, label);
+// A navigation that throws must cost this viewport its cases, not the whole run.
+// Before this guard, one `goto` timeout printed a stack trace and skipped the other
+// 53 checks, which reads like a layout regression instead of one slow page load.
+for (const [width, label] of [[390, 'mobile-390'], [360, 'mobile-360']]) {
+  try {
+    await runPhone(width, label);
+  } catch (e) {
+    check(`[${label}] the phone suite ran to the end`, false, String(e).split('\n')[0]);
+  }
+}
 
 // ---------- 4. desktop must not gain an Escape-to-collapse ----------
-{
+try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addCookies(session.cookies);
   const page = await context.newPage();
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   const before = await snap(page);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -269,6 +281,8 @@ for (const [width, label] of [[390, 'mobile-390'], [360, 'mobile-360']]) await r
   check('desktop: both panels still open on a clean visit', before.collapsed === false && before.details === true, `collapsed=${before.collapsed} details=${before.details}`);
   check('desktop: Escape leaves the inline panels alone', after.collapsed === false && after.details === true, `collapsed=${after.collapsed} details=${after.details}`);
   await context.close();
+} catch (e) {
+  check('desktop: the regression check ran to the end', false, String(e).split('\n')[0]);
 }
 
 await browser.close();

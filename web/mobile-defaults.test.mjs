@@ -11,6 +11,7 @@
  *   PREVIEW=http://127.0.0.1:5199 node web/mobile-defaults.test.mjs
  */
 import { chromium } from 'playwright';
+import { gotoApp, reloadApp } from './app-ready.mjs';
 
 const BASE = process.env.PREVIEW ?? 'http://127.0.0.1:5199';
 const EMAIL = process.env.PREVIEW_EMAIL ?? 'artist@antinrml.com';
@@ -69,7 +70,7 @@ const panels = (page) => page.evaluate(() => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addCookies(session.cookies);
   const page = await context.newPage();
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   const s = await panels(page);
   check('desktop: clean visit boots with no stored preference', s.stored.sidebar === null && s.stored.details === null, JSON.stringify(s.stored));
   check('desktop: sidebar is expanded as before', s.sidebarPresent && s.sidebarCollapsed === false, `collapsed=${s.sidebarCollapsed}`);
@@ -91,10 +92,10 @@ const panels = (page) => page.evaluate(() => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addCookies(session.cookies);
   const page = await context.newPage();
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   await page.getByRole('button', { name: 'Collapse sidebar' }).click();
   await page.waitForTimeout(300);
-  await page.reload({ waitUntil: 'networkidle' });
+  await reloadApp(page);
   const s = await panels(page);
   check('desktop: a collapsed sidebar survives a reload', s.sidebarCollapsed === true, `collapsed=${s.sidebarCollapsed}`);
   await context.close();
@@ -112,7 +113,7 @@ const panels = (page) => page.evaluate(() => {
     localStorage.setItem('grokbot.detailsOpen', '1');
   });
   const page = await context.newPage();
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await gotoApp(page, BASE);
   const s = await panels(page);
   check('phone: a stored "sidebar open" preference is obeyed', s.sidebarCollapsed === false, `collapsed=${s.sidebarCollapsed}`);
   check('phone: a stored "details open" preference is obeyed', s.detailsPresent, `present=${s.detailsPresent}`);
