@@ -323,20 +323,32 @@ text in this section was wrong in both directions:
 
 - grokbot **on this laptop**: `main` only. There is no `prod` branch here; the deploy
   branch of that name lives on the VPS (`ssh antinrml 'git -C
-  projects/grokbot-clone branch -a'`). What also sits here is thirteen `t3/*` branches
-  against thirteen worktrees under `~/.t3/worktrees/grokbot-clone/` (re-measured
-  2026-11-28); they are not part of the product, and removing them means removing
-  those worktrees first. The count keeps growing because every auto-recovery thread
-  gets its own worktree and nothing prunes them — `git worktree list` and
-  `git branch --list 't3/*'` agree on 13.
-- grokbot remote `origin` (`official-manef`): `main`, `feat/mso-runtime`, `ci/mobile-suites`,
-  `qa/mobile-overlays`, `test/rename-route` — the last three are merged and could be
-  deleted, but deleting a merged branch is cosmetic and nobody asked.
-  `feat/mso-runtime` is kept at the owner's choice: it is the **pre-Hermes architecture**,
-  its `agent/loop.ts` calls `xai.responses.create` directly and owns history via
+  projects/grokbot-clone branch -a'`). What also sits here is a growing pile of `t3/*`
+  branches, one per worktree under `~/.t3/worktrees/grokbot-clone/`; they are not part of
+  the product, and removing them means removing those worktrees first. Nothing prunes
+  them: every auto-recovery thread gets a new worktree and none is retired. Count it
+  rather than trusting a number here — this section said "ten", then "thirteen", and the
+  count was wrong again within a day both times:
+
+  ```bash
+  git -C ~/projects/manef/grokbot-clone worktree list | wc -l
+  git -C ~/projects/manef/grokbot-clone branch --list 't3/*' | wc -l   # same number
+  ```
+- grokbot remote `origin` (`official-manef`): list what is there instead of trusting a
+  snapshot — it went from 5 branches to 16 in three days, most of them one-shot fix or
+  handoff branches from finished threads. Only `feat/mso-runtime` needs an explanation:
+  it is kept at the owner's choice, being the **pre-Hermes architecture** — its
+  `agent/loop.ts` calls `xai.responses.create` directly and owns history via
   `llm_items`/`memory.ts` (`maybeCompact`, `pickSplit`). Nothing in it is "work that was
   forgotten"; it is the design Hermes replaced. Do not rebase it onto `main` hoping to
-  recover features.
+  recover features. Everything else is safe to prune once confirmed merged:
+
+  ```bash
+  git ls-remote --heads origin | awk '{print $2}' | sed 's#refs/heads/##' | sort
+  ```
+
+  (Pruning remote branches is cosmetic and nobody has asked; the point is only that a
+  count or list written here goes false within days.)
 - MSO: many `agent/*` and `agent/nightly/*` branches, owned by other agents. Untouched.
 
 ### 6. Traefik loses the host backend after a Docker network change

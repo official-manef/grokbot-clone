@@ -78,3 +78,34 @@ test('the handoff does not try to record its own HEAD', () => {
     );
   }
 });
+
+test('the handoff does not hardcode counts that only get larger', () => {
+  // The same defect in another costume. "ten t3/* branches" became thirteen within a
+  // day, then fourteen; "five remote branches" became sixteen in three days. A number
+  // describing a pile that grows on its own is stale before it is read, and each
+  // correction is another PR that re-creates the bug. Name the command instead.
+  const doc = read('docs/CONTINUE.md');
+
+  const spelled = '(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|' +
+    'fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty)';
+  const counted = `${spelled}|\\d+`;
+
+  const offenders = [];
+  for (const [i, line] of doc.split('\n').entries()) {
+    const t = line.trim();
+    if (t.startsWith('`') || t.startsWith('$')) continue; // command output
+    // Narration about how a number changed is evidence and stays true; a count asserted
+    // as the current state is what rots.
+    if (/went from|became|used to|was wrong|had gone/i.test(t)) continue;
+    // A count of branches/worktrees, optionally spelled out.
+    const m = new RegExp(`\\b(${counted})\\s+(?:\\w+\\s+){0,2}(?:t3/\\* branches|branches|worktrees)\\b`, 'i');
+    if (m.test(t)) offenders.push(`${i + 1}: ${t}`);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    'a hardcoded branch/worktree count is stale as soon as another thread starts; ' +
+      'give the counting command instead:\n' + offenders.join('\n'),
+  );
+});
