@@ -669,8 +669,8 @@ reproduce.
 
 Build state, stated precisely, because "current" alone has already misled twice: the
 laptop's `web/dist` bundle is current for the XSS and phone-overlay fixes, and its
-`server/dist` is **not** current for `d1963b1`. The VPS `prod` worktree is behind by 15
-commits and predates the XSS fix entirely, which is not cosmetic:
+`server/dist` is **not** current for `d1963b1`. The VPS `prod` worktree predates the XSS
+fix entirely, which is not cosmetic:
 
 ```
 $ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
@@ -681,10 +681,22 @@ $ curl -s 'https://grok.rahmanef.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cim
 
 So `grok.antinrml.com` still runs `cc6a22b` and is exploitable now: `content-type: text/html`,
 no CSP, no `nosniff`, and script running on that origin can call `/api/*` with the
-visitor's cookie (httpOnly stops reading it, not using it). `prod` has **0 commits of its
-own** (`git log manef/main..HEAD` → 0) and is 15 behind `manef/main`, so the fix is a pure
-fast-forward. Deploying it is the highest-value thing left, and it needs an explicit
-go-ahead because it restarts a hostname other people use:
+visitor's cookie (httpOnly stops reading it, not using it). It also predates everything
+`25b445a` (#23) closed, and two of those matter more on this host than on the laptop:
+the VNC `upgrade` had no `Origin` check at all, and the embedded deployment sets
+`SameSite=None`, so any site could open that socket with a visitor's cookie and drive a
+bot's desktop. Deploying is the highest-value thing left, and it needs an explicit
+go-ahead because it restarts a hostname other people use. Check the two numbers that
+decide whether it is a pure fast-forward rather than trusting a count here — this
+section said "15 behind" while the real figure had reached 22:
+
+```bash
+ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod &&
+  git rev-list --count manef/main..HEAD &&   # commits of its own: expect 0
+  git rev-list --count HEAD..manef/main'    # behind: any number, fast-forward still safe
+```
+
+With 0 of its own the merge is a fast-forward and nothing on that host is lost:
 
 ```bash
 ssh antinrml
