@@ -3,7 +3,69 @@
 Written at the end of a long session so the next one starts informed rather than
 re-deriving context. Every claim below was verified, not remembered.
 
-## 2026-11-28 (last): the schema lived in two `init*()` helpers, so the store needed the server booted
+## 2026-11-28 (latest): an unknown `/api/*` path answered `200 text/html`, and the test passed anyway
+
+Found by picking up the thread the watchdog marked failed (`10 auditor selesai…`), which
+had reached this exact root cause before the provider cut it off — its last three items
+said "an unknown `/api/*` falls through to the SPA catch-all", "test passed only because
+it drove the sub-app unmounted", and then died mid-edit. The finding was right; the edit
+was never committed. It is now.
+
+Measured on a real build with `web/dist` present, before the fix:
+
+```
+/api/auth/google/callback          200 text/html   <- a deleted route, still "found"
+/api/nope                          401 application/json
+/auth/google/callback              200 text/html   <- not even under /api
+```
+
+Three consequences, all real:
+
+- a client's `req()` calls `res.json()` on `index.html` and throws a parse error where a
+  404 belongs;
+- "does this route exist?" cannot be answered from outside at all, which is why the
+  handoff told operators to verify the `/auth/google/callback` removal with a `curl` that
+  could only ever print `302` before the deploy and `200` after it — never the `401` the
+  doc promised;
+- `staff-only.test.mjs` asserted `401` for the removed route and passed while the served
+  build answered `200`, because `_staff-signin-probe.mjs` mounted `api` bare. Hono carries
+  on past a sub-app that matched nothing, so the fallback only exists in the composed app
+  the probe was not driving. Same class as the stale-dist false-green: the fixture was not
+  the app.
+
+The fix, in that order:
+
+| file | change |
+|---|---|
+| `server/src/app.ts` | **new.** `buildApp({ staticRoot })` holds the whole request surface in real order: CSRF gate, `/api/health`, `/api/capabilities`, the four mounts, then `app.all('/api/*')` → `404 {error:"not found"}`, then the static handler + SPA fallback |
+| `server/src/index.ts` | 113 → 27 lines: boot only (`desSelfTest`, `expireStaleApprovals`, `buildApp()`, `serve`, VNC relay, scheduler, idle watcher, engines) |
+| `server/test/_staff-signin-probe.mjs` | drives `buildApp({ staticRoot: <temp dir with a fake index.html> })`, adds `/api` to action paths, sends `Origin` on non-GET the way a browser does |
+| `server/test/staff-only.test.mjs` | the removed-route case now asserts `404` + `application/json` + `{error:"not found"}`, not just `401` |
+| `server/test/api-404.test.mjs` | **new**, 4 cases: unknown `/api` path is JSON and never the page; a deleted route is `404` with no `Location`/`Set-Cookie`; `/` still serves the app; a cross-site POST to an unknown path is still `403` (proves the gate runs before the catch-all) |
+
+`staticRoot` is injectable because CI runs `npm test` **before** `npm run build`, so
+`web/dist` does not exist there and a fallback registered only when the directory exists
+would be absent in exactly the run meant to catch this.
+
+Verified red with `app.all('/api/*')` deleted: `api-404.test.mjs` 3 pass / **1 fail**
+("a route deleted from routes.ts answers 404, not 200"), the CSRF case staying green for
+the right reason (the gate is separate middleware). Green with it. Against a real booted
+server with the real `web/dist`: `/api/auth/google/callback` `404 application/json`,
+`/` `200 text/html`, `/api/health` `503` (no engine configured).
+
+Gates: `npm run typecheck` 0, `npm test` **239/239** (235 before, +4 here), `npm run build`
+0, `node scripts/mobile-suites.mjs` 25/25 + 58/58 + 10/10 on a second run — the first run
+failed one suite at load 187 on 16 cores, the flake this file already documents, and the
+named suite passed alone immediately. Re-run it on a quiet box before blaming a change.
+
+Both public hosts still answer `302` there (`grok.rahmanef.com`, `grok.antinrml.com`,
+laptop `:8790`): they predate `d1963b1`, so they still *mount* the handler. After a deploy
+the correct answer is `404 application/json`. This also corrects three places in this file
+that claimed a current build gives `401` — no build of this fork ever has, because
+`/api/auth/*` is exempt from the auth wall and that exemption is what let the path reach
+the fallback.
+
+## 2026-11-28: the schema lived in two `init*()` helpers, so the store needed the server booted
 
 Not a doc fix this time — a real bug that four test probes were papering over.
 
@@ -98,7 +160,9 @@ Deploy is what closes it:
 ```bash
 cd /home/rahman/projects/manef/grokbot-clone
 npm run build && systemctl --user restart grokbot-clone.service
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8790/api/auth/google/callback   # 401 after
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8790/api/auth/google/callback
+# 404 application/json after. NOT 401: that is what this line claimed until 2026-11-28,
+# and no build has ever answered 401 here — see the `/api/*` catch-all section below.
 ```
 
 That restart was **not** done in this session: it is a production deploy on a hostname
@@ -528,13 +592,16 @@ in `findOrCreateUser` still refuses a non-staff address first, so nothing else c
 
 | before | after |
 |---|---|
-| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the 401 wall |
+| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the `/api/*` catch-all |
 | `googleProfile()` reachable from a route | gone with the route |
 | `deleteConnection()` kept only for that route | gone |
 
 `staff-only.test.mjs` proves it by running the request: a mounted `/auth/*` route
-answers `302 ?login=failed`, so the `401` can only come from the catch-all below the
-auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full gates on
+answers `302 ?login=failed`, so a 404 can only come from the catch-all below the auth
+wall. **The first version of that case asserted 401 and passed for the wrong reason** —
+it drove the `api` sub-app, which has no SPA fallback behind it, while the served build
+answered `200 text/html` for that path. Corrected on 2026-11-28; the defect and the
+composite-app fix are described in the `/api/*` catch-all section below. Full gates on
 `2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
 `node scripts/mobile-suites.mjs` green.
 
@@ -556,8 +623,12 @@ The audit's LOW/MEDIUM "docs describe files deleted in `011649d`" item is **clos
 - The laptop-is-stale claim 400 lines up is **correct and was left alone**: `server/dist`
   was built 14:24:49, `d1963b1` merged 15:18, and the built tree still proves it —
   `server/dist/routes.js:272` mounts `/auth/google/callback` while `server/src/routes.ts:284`
-  says it is gone, and `curl https://grok.rahmanef.com/api/auth/google/callback` → `302`
-  against the `401` a current build would give. Do not "fix" that sentence.
+  says it is gone, and `curl https://grok.rahmanef.com/api/auth/google/callback` → `302`.
+  Do not "fix" that sentence. What *was* wrong in it, and is corrected, is the expected
+  status after a rebuild: this said `401`, and measured on 2026-11-28 the pre-fix build
+  answered `200 text/html` and the fixed one answers `404 application/json`. No build of
+  this fork has ever answered `401` on that path — the auth wall only sees paths that are
+  not `/api/auth/*`, and that prefix is exempt.
 
 A path sweep of README, AGENTS, GEMINI and `docs/*.md` still lists paths, but every
 remaining hit is legitimate: another repo's files (`config.yaml`, `hermes_cli/auth.py`,
@@ -670,7 +741,7 @@ What it was chasing is now closed honestly:
 |---|---|
 | "docs describe files deleted in `011649d`" | `011649d` deleted **nothing** — 1 add, 16 modifies. The premise was false. |
 | `AGENTS.md` names `adapters/mso.ts` and `adapters/orgo.ts` | only `adapters/docker.ts` exists; the other two backends are `server/src/mso.ts` / `orgo.ts`, siblings in `box.ts`'s dispatch table |
-| "the laptop's build is stale" | **true, and left alone** — `server/dist` 14:24:49 predates `d1963b1` (15:18), `server/dist/routes.js:272` still mounts the removed route, live `302` vs the `401` a current build gives |
+| "the laptop's build is stale" | **true, and left alone** — `server/dist` 14:24:49 predates `d1963b1` (15:18), `server/dist/routes.js:272` still mounts the removed route, live `302` |
 
 `server/test/box-layout-docs.test.mjs` (3 cases) now reads the adapters directory,
 `box.ts`'s imports and the adapter's exported `createDockerBoxRuntime`, so the doc and

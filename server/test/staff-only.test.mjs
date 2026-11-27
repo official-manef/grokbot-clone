@@ -217,14 +217,23 @@ test('/auth/google/callback is gone, not merely inert', async () => {
   // id could name both and be signed in as the victim, so the route had to go, not
   // just stay unreachable.
   //
-  // 401 is the proof it is not mounted: every `/auth/*` route sits above the auth wall
-  // in routes.ts, so a mounted callback answers 302 `?login=failed`. A 401 can only
-  // come from the wall below, i.e. the request fell through to the catch-all.
+  // 404 with a JSON body is the proof it is not mounted: every `/auth/*` route sits
+  // above the auth wall in routes.ts, so a mounted callback answers 302
+  // `?login=failed`. A 404 here can only come from the `/api/*` catch-all in `app.ts`.
+  //
+  // The status alone was not enough. This case used to assert 401, which was true of
+  // the `api` sub-app the probe drove and false of the served build: the mounted app
+  // answered `200 text/html` for this path, because an unmatched `/api/*` request fell
+  // through to the SPA fallback. A response status that cannot be distinguished from
+  // the app's own page does not prove a route is gone, so the body's type is asserted
+  // as well.
   const [r] = await run(
     [{ path: '/auth/google/callback?attempt=login_x&connected_account_id=ca_victim' }],
     { WORKOS_API_KEY: 'sk_test', WORKOS_CLIENT_ID: 'client_test', ALLOWED_EMAIL_DOMAINS: 'antinrml.com', COMPOSIO_API_KEY: 'test-key' },
   );
-  assert.equal(r.status, 401, 'the route does not exist, so no query string is read');
+  assert.equal(r.status, 404, 'the route does not exist, so no query string is read');
+  assert.match(r.contentType, /^application\/json/, 'an unknown API path is not a page');
+  assert.equal(r.body?.error, 'not found');
   assert.equal(r.location, '');
   assert.equal(r.setCookie, false, 'and no session is minted from a caller-supplied id');
   assert.deepEqual(r.counts, empty, 'nor is anything written on the way out');
