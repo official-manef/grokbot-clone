@@ -8,13 +8,22 @@
  *
  * Action: { method?, path, body?, headers?, ownerKey? }. `ownerKey: true` adds the
  * Authorization header derived from SESSION_SECRET (same HMAC isOwnerKey checks).
+ *
+ * Mounts `createApp()` — the app `index.ts` actually serves — rather than `api` on
+ * its own. A bare mount answers `404` where production answers `401`, and served the
+ * app shell for a removed route where production now answers `404`: both directions
+ * of that mismatch once made a test green about a stack nobody runs.
  */
 import crypto from 'node:crypto';
 
 const spec = JSON.parse(process.argv[2] ?? '{}');
 
-const { api } = await import('../src/routes.ts');
+const { createApp } = await import('../src/app.ts');
 const { db } = await import('../src/db.ts');
+
+// No SPA fallback: this probe is about API answers, and a live fallback would only
+// hide a path that fell through the router.
+const app = createApp({ webDist: '/nonexistent-web-dist' });
 
 const counts = () => ({
   users: db.prepare('SELECT COUNT(*) n FROM users').get().n,
@@ -28,11 +37,18 @@ const ownerKey = () =>
 
 const results = [];
 for (const action of spec.actions ?? []) {
+  // `createApp` mounts every route under `/api` and puts the CSRF gate in front, so the
+  // probe supplies both instead of every call site repeating them: the action paths are
+  // written relative to that mount, and non-GET actions carry this app's own origin
+  // (the gate has its own file, `origin-check.test.mjs`, for the refusal direction).
+  const path = action.path.startsWith('/api/') ? action.path : '/api' + action.path;
+  const method = action.method ?? 'GET';
   const headers = { 'content-type': 'application/json', ...(action.headers ?? {}) };
+  if (method !== 'GET' && !headers.origin) headers.origin = process.env.APP_URL ?? 'http://localhost:5173';
   if (action.ownerKey) headers.authorization = `Bearer ${ownerKey()}`;
-  const init = { method: action.method ?? 'GET', headers };
+  const init = { method, headers };
   if (action.body !== undefined) init.body = JSON.stringify(action.body);
-  const res = await api.request(action.path, init);
+  const res = await app.request('http://localhost' + path, init);
   let body = null;
   try { body = await res.clone().json(); } catch { /* not JSON */ }
   results.push({
