@@ -575,15 +575,35 @@ no check at all). All green, typecheck 0, build 0, mobile-suites all passed. The
 count is deliberately not repeated here: it was 200 before this, and read 222 once #24
 added two cases. Run `npm test` for the current number.
 
-**One caveat this port inherits from upstream.** `isReadOnlySlug` allowlists by verb, and
-`WRITE_RE` has no word for `APPEND`, `UPSERT`, `SCHEDULE`, `IMPORT`, `DUPLICATE` or
-`LABEL`. A slug shaped `<read>_AND_<that verb>`, e.g. `JIRA_SEARCH_AND_APPEND_COMMENT`,
-therefore reads as read-only and auto-allows. This was found by reading the two regexes,
-not by exercising a real call, so it is **unverified**: there is no `COMPOSIO_API_KEY` on
-this laptop and no slug catalog in the tree, so whether Composio has a slug shaped that
-way could not be checked. Treat it as a hypothesis to test against the live tool list
-before trusting the allowlist, and prefer adding the missing verbs over widening
-`WRITE_RE` wholesale.
+**One caveat this port inherits from upstream, now measured rather than assumed.** The
+allowlist is a verb match, and `WRITE_RE` has no word for `APPEND`, `UPSERT`, `SCHEDULE`,
+`IMPORT`, `DUPLICATE` or `LABEL`, so a slug shaped `<read>_AND_<one of those>` would
+auto-allow. Whether that shape occurs was tested against the live tool catalog rather
+than left as prose — 185 real slugs from 66 queries via `composio search`:
+
+| | |
+|---|---|
+| slugs examined | 185 |
+| auto-allowed | 88 |
+| of those, actually a write | **0** |
+| slugs containing a read word | 96 |
+| …that `WRITE_RE` is what blocks | 8 |
+| real slugs containing `_AND_` | 0 |
+
+So the gap is theoretical: every one of the 88 auto-allowed slugs is a genuine read
+(`GMAIL_LIST_LABELS`, `STRIPE_LIST_REFUNDS`, `NOTION_RETRIEVE_PAGE`, …), and Composio
+names writes with verbs `WRITE_RE` already covers (`NOTION_APPEND_TEXT_BLOCKS`,
+`JIRA_ADD_COMMENT`, `SLACK_SCHEDULE_MESSAGE`, `GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND`
+all ask). Add the missing verbs if such a slug ever appears; do not widen the allowlist
+speculatively. Re-measure with:
+
+```bash
+composio search "<use case>" --limit 15 --json   # then run the slugs through isReadOnlySlug
+```
+
+Note for anyone re-doing this: a boundary-less `READ` regex matches `SPREADSHEETS`, so
+test with the code's own `READ_RE` (which requires `_READ(_|$)`) or you will invent
+false positives — that mistake is how this paragraph first claimed a live hole.
 
 Not ported, deliberately: the rename to "Orgo Teammates", the artwork removal, the
 `HOST` bind option and the `ALLOWED_EMAILS` sign-up wall. The first three are cosmetic
