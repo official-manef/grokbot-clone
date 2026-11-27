@@ -7,19 +7,38 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `295d3ec` | `0/0` in sync |
-| mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `fdd0c49f` | `0/0` in sync |
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `7165c2a` | `0/0` in sync |
+| mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
-`origin` in grokbot is the upstream `nickvasilescu/grokbot-clone`, not a fork this
-machine pushes to; being "ahead 66 / behind 3" of it is expected and not drift.
+`upstream` in grokbot is `nickvasilescu/grokbot-clone`, not a fork this machine pushes
+to; being behind it is expected and not drift.
 
-Production grokbot runs from `.worktrees/prod` (branch `prod`, user unit
-`grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), fast-forwarded to
-`853e5d2` and built 2026-11-18 21:48. That build predates the nine commits merged since
-(`739a27f`..`295d3ec`: rename reachability, phone shell fixes, mobile suites in CI), so
-`prod` is behind `main` by nine. Live MSO `:4005` (`pid 2606283`) serves a 2026-11-19
-13:18 build from `projects/mso` itself.
+### There are TWO deployments, and this file used to describe neither
+
+| where | unit | worktree | port | hostname | build |
+|---|---|---|---|---|---|
+| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | **stale**: `web/dist` and `server/dist` are 2026-11-15 00:17, i.e. built from `b5ffa0d`, **44 commits behind** `7165c2a` |
+| VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `cc6a22b`, `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com` |
+
+Older text in this file said "`.worktrees/prod` … `grokbot.service` … port 4000 behind
+Traefik at `grok.antinrml.com`" as if that were the only deployment; it is only the VPS
+one, and this laptop does not have that worktree at all (`ss -ltn` here shows `8790`, no
+`4000`). The other way round: the laptop serves on `:8790` behind a Cloudflare tunnel, not
+Traefik.
+
+Both answer 200 today (`/api/health` on each hostname). The laptop's built assets are
+what is stale — its `web/dist/assets/index-j_S061_x.js` lacks `overlay.tsx`, so the
+2026-11-26 phone-overlay fixes are not in what `grok.rahmanef.com` serves. Rebuild and
+restart it before claiming any mobile fix is live:
+
+```bash
+cd /home/rahman/projects/manef/grokbot-clone
+npm run build && systemctl --user restart grokbot-clone.service
+curl -s localhost:8790/api/health
+```
+
+Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
 Working trees are clean. `npm test` in grokbot: **192 pass, 0 fail**. typecheck 0
 errors. MSO: `tsc` clean, `lib/desktop` suite 32/32.
@@ -313,15 +332,42 @@ docker exec dokploy-traefik sh -c 'wget -q -O /dev/null http://172.30.1.1:4000/'
   before dying; the work was salvaged and verified by hand. Prefer writing small
   modules directly when a provider is flaky.
 
+## 2026-11-27: how two recovery threads actually died, and PR #10
+
+Both "failed" threads in this project died the same way, and neither was a code failure:
+
+- `mcp:43c8d292…` (the `10 auditor` resume) ran 13m19s and ended with turn-item
+  `type=error`, `failure.class=provider_error`,
+  `message="Internal error: Failed to execute statement", code=-32603`. That is the ACP
+  provider (OpenCode), not this repo.
+- `mcp:18160e89…` (the next resume) ended with the same `provider_error` after 2
+  minutes, mid-grep. Its last reasoning had already concluded the real finding: the 17
+  failing `npm test` cases were a probe subprocess timing out under load, not
+  assertions.
+
+The substance it had reached is now merged as PR #10 (`7165c2a`):
+`npm test` runs `--test-concurrency=4`, `shell-description.test.mjs` distinguishes a
+killed probe from a crashed one, and `AGENTS.md` / `GEMINI.md` / the `mso.md` ignore
+rule are tracked instead of living untracked in one worktree.
+
+Verified on this laptop 2026-11-27: `npm test` 192 pass / 0 fail in 24s at load ~33,
+`npm run typecheck` and `npm run build` exit 0, and CI `success` on `7165c2a`
+(`npm ci`, typecheck, test, build, playwright install, `mobile-suites`).
+
 ## First commands for the next session
 
 ```bash
-cd /home/antinrml/projects/grokbot-clone && git log --oneline -1 && npm test
-cd /home/antinrml/projects/mso && git log --oneline -1
-ss -ltnp | grep -E ':5173|:8787|:4005'   # then check each pid's cwd
-docker exec dokploy-traefik sh -c 'wget -q -O /dev/null http://172.30.1.1:4000/'; echo $?  # 0 = host backend reachable
+# this laptop
+cd /home/rahman/projects/manef/grokbot-clone && git log --oneline -1 && npm test
+ss -ltnp | grep -E ':8790|:4005'   # then check each pid's cwd
+systemctl --user status grokbot-clone.service --no-pager | head -5
+
+# VPS
+ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod && git log --oneline -1'
+ssh antinrml 'systemctl --user status grokbot.service --no-pager | head -5'
 ```
 
 Then work item 6's permanent fix if root access is available, or pick the next real
-feature. Items 1, 3, 4 and 5 are closed; item 2 is closed with a real-container script
-to reproduce. Nothing here needs a product decision right now.
+feature. Items 1–5 are closed; item 2 is closed with a real-container script to
+reproduce. The only stale thing is the laptop's served build (see the two-deployment
+table above). Nothing here needs a product decision right now.
