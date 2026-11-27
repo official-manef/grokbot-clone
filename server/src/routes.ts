@@ -22,7 +22,7 @@ import { conversationGenerations, firstExchange, listConversations, setConversat
 import { fallbackTitle } from './agent/session-title.js';
 import { orgo } from './orgo.js';
 import { box, libraryDirFor } from './box.js';
-import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, toolkitInfo } from './composio.js';
+import { catalog, connectedToolkits, disconnect, startConnect, toolkitInfo } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
@@ -202,9 +202,10 @@ const allowlistConfigured = () => env.allowedEmails.length > 0 || env.allowedEma
  * This path used to fork to Composio-managed Google, which is a fan-facing flow
  * (any Google account could start it and land on a sign-up). Google OAuth belongs
  * to the game and antinrml.com, so that fork is gone: this app only runs AuthKit,
- * and AuthKit is walled by the allowlist. `/auth/google/callback` stays mounted
- * because it is a public URL in the wild; it is inert without a live attempt row
- * and it refuses a non-staff address before writing anything.
+ * and AuthKit is walled by the allowlist. The old `/auth/google/callback` is gone too:
+ * its start half had already been deleted, and it read `connected_account_id` from
+ * the query string with no TTL and no cookie binding, so all it could ever do was
+ * turn a caller-supplied id into a session.
  *
  * The wall in code is necessary but not sufficient: AuthKit's hosted page is
  * WorkOS's, and by default it offers a "Sign up" form. The operator must also, in
@@ -280,29 +281,12 @@ api.get('/auth/workos/callback', async (c) => {
   }
 });
 
-api.get('/auth/google/callback', async (c) => {
-  const attempt = db.prepare('SELECT * FROM login_attempts WHERE id=?').get(c.req.query('attempt') ?? '') as any;
-  const caId = c.req.query('connected_account_id') ?? attempt?.connected_account_id;
-  if (!attempt || c.req.query('status') === 'failed' || !caId) return loginFailed(c);
-  if (attempt.connected_account_id && caId !== attempt.connected_account_id) return loginFailed(c);
-  db.prepare('DELETE FROM login_attempts WHERE id=?').run(attempt.id);
-  try {
-    const profile = await googleProfile(caId);
-    // Staff wall, before any row, Bot or session: same rule as every other path.
-    if (!isStaffEmail(profile.email)) {
-      logRefusal('GET /auth/google/callback');
-      return loginRefused(c);
-    }
-    const { id, isNew } = findOrCreateUser(profile.email, profile.name, attempt.provisional_user_id);
-    // Existing user: the Gmail connection made for sign-in belongs to a throwaway id; remove it.
-    if (!isNew && id !== attempt.provisional_user_id) await deleteConnection(caId);
-    createSession(c, id);
-    return c.redirect(`${env.appUrl}/`);
-  } catch (e: any) {
-    console.error('[auth] google callback', e);
-    return loginFailed(c);
-  }
-});
+// `/auth/google/callback` used to live here. Its start half was already deleted, so
+// nothing could create the attempt row it read, and it trusted `connected_account_id`
+// from the query string with no TTL and no cookie binding. A route whose only inputs
+// are attacker-supplied and whose only output is a session is a liability even when
+// its own precondition is missing, so the route, `googleProfile` and the
+// `deleteConnection` it needed are gone: this app signs in through AuthKit only.
 
 /**
  * Password sign-in. The password is shared with whatever set AUTH_PASSWORD (MSO

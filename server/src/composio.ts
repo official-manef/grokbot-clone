@@ -146,23 +146,8 @@ const READ_RE = /_(GET|LIST|SEARCH|FETCH|FIND|READ|RETRIEVE|QUERY|LOOKUP|CHECK|D
 export const isReadOnlySlug = (slug: string) => READ_RE.test(slug.toUpperCase());
 
 // ---------- sign-in via Composio-managed Google (Gmail) connection ----------
-// Removed the start half (`startGoogleLogin`): Google OAuth belongs to the game and
-// antinrml.com, not this app. `googleProfile` stays because /auth/google/callback is
-// still mounted for URLs already in the wild; with no way to create an attempt row
-// it cannot mint anything, and it refuses a non-staff address besides.
+// Both halves are gone: `startGoogleLogin` when AuthKit replaced the fan-facing fork,
+// and now `googleProfile` with `/auth/google/callback`. Keeping an unused helper that
+// reads a caller-supplied connected-account id is one refactor away from being wired
+// back into a route that mints sessions from it.
 
-export async function googleProfile(connectedAccountId: string): Promise<{ email: string; name?: string }> {
-  const r: any = await composioClient().tools.proxyExecute({
-    endpoint: 'https://gmail.googleapis.com/gmail/v1/users/me/profile',
-    method: 'GET',
-    connectedAccountId,
-  } as any);
-  const data = r?.data ?? r;
-  const email = data?.emailAddress ?? data?.email;
-  if (!email) throw new Error(`Could not read Google profile: ${JSON.stringify(r).slice(0, 300)}`);
-  return { email, name: undefined };
-}
-
-export async function deleteConnection(id: string) {
-  try { await composioClient().connectedAccounts.delete(id); } catch { /* ignore */ }
-}

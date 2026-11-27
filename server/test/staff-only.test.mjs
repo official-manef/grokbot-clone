@@ -209,3 +209,23 @@ test('/auth/workos/callback refuses an allowlisted-but-unfinished attempt only a
   assert.match(r.location, /login=failed/);
   assert.deepEqual(r.counts, empty);
 });
+
+test('/auth/google/callback is gone, not merely inert', async () => {
+  // Its start half was deleted, so nothing could create the attempt row it read, and
+  // it trusted `connected_account_id` from the query string with no TTL and no cookie
+  // binding. A caller who has their own live attempt and a victim's Composio account
+  // id could name both and be signed in as the victim, so the route had to go, not
+  // just stay unreachable.
+  //
+  // 401 is the proof it is not mounted: every `/auth/*` route sits above the auth wall
+  // in routes.ts, so a mounted callback answers 302 `?login=failed`. A 401 can only
+  // come from the wall below, i.e. the request fell through to the catch-all.
+  const [r] = await run(
+    [{ path: '/auth/google/callback?attempt=login_x&connected_account_id=ca_victim' }],
+    { WORKOS_API_KEY: 'sk_test', WORKOS_CLIENT_ID: 'client_test', ALLOWED_EMAIL_DOMAINS: 'antinrml.com', COMPOSIO_API_KEY: 'test-key' },
+  );
+  assert.equal(r.status, 401, 'the route does not exist, so no query string is read');
+  assert.equal(r.location, '');
+  assert.equal(r.setCookie, false, 'and no session is minted from a caller-supplied id');
+  assert.deepEqual(r.counts, empty, 'nor is anything written on the way out');
+});
