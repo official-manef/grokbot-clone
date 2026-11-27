@@ -106,6 +106,13 @@ commit at concurrency 4: 192 pass in 20s. If a probe test ever reports a timeout
 the message — it now says whether the child was *killed* (the box was too loaded) or
 crashed (a real failure).
 
+**That bound is a mitigation, not a fix.** Measured again on `c7b8deb` when this box sat
+at load 144–218 on 16 cores, still at `--test-concurrency=4`: 194/197, then 195/197, and
+every failure was a ~60 s probe timeout in a *different* file each run (`prompt`,
+`web_search`, `apps-callback`, `llm-capability`) with zero assertion failures. Each of
+those files passes 13/13 when run alone. Before blaming a change, check `/proc/loadavg`
+and re-run the named file by itself.
+
 **The "host has 0 docker images" claim in the previous version of this file was wrong.**
 The daemon works, 26 images were present, and `docker build -t grokbot-desktop:latest
 server/desktop` succeeds. Item 2 was blocked on a wrong premise, not on the host.
