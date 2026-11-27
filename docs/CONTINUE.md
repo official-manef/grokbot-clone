@@ -46,8 +46,10 @@ hostname other people may be using, so it needs an explicit go-ahead.
 
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
-Working trees are clean. `npm test` in grokbot: **192 pass, 0 fail**. typecheck 0
-errors. MSO: `tsc` clean, `lib/desktop` suite 32/32.
+Working trees are clean. `npm test` in grokbot: **192 pass, 0 fail**, re-run 2026-11-27
+on `7165c2a` at load ~33 (24s); `npm run typecheck` and `npm run build` exit 0. The
+`MSO: tsc clean, lib/desktop suite 32/32` line below is from 2026-11-20 and was **not**
+re-run on 2026-11-27 — treat it as inherited, not measured.
 
 **`npm test` now bounds its own parallelism** (`--test-concurrency=4`). `node --test`
 defaults to CPU count, and each of the 24 files forks `node --import tsx` children that
