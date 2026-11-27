@@ -478,9 +478,53 @@ auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full g
 `2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
 `node scripts/mobile-suites.mjs` green.
 
-Remaining known holes are the ones already recorded above, none of them new: the
-laptop's served build is stale, the VPS prod worktree trails `main`, and the audit's
-LOW/MEDIUM items (docs that described files deleted in `011649d`) are still open.
+Remaining known holes are the ones already recorded above, none of them new: the VPS
+`prod` worktree trails `main`, and both hosts mount `/auth/google/callback` until they
+are rebuilt (harmless while `COMPOSIO_API_KEY` is unset — see the check below).
+
+The audit's LOW/MEDIUM "docs describe files deleted in `011649d`" item is **closed**
+(2026-11-28), but the item as written was mis-scoped, and one doc claim I nearly
+"corrected" into being wrong was in fact right:
+
+- `011649d` deleted nothing — its name-status is 1 add + 16 modifies — so no doc could
+  have described a file that commit removed. The premise was false.
+- The one real defect was `AGENTS.md:15`: it said `server/src/box/adapters/` held three
+  adapters (`docker.ts`, `mso.ts`, `orgo.ts`) and that `desktop.ts` "is a wrapper over
+  the chosen adapter". Only `docker.ts` is there; `mso.ts` and `orgo.ts` are at
+  `server/src/` and are siblings in `box.ts`'s dispatch table, not adapters, and
+  `desktop.ts` is the grokbot wiring over `adapters/docker.ts`. Corrected.
+- The laptop-is-stale claim 400 lines up is **correct and was left alone**: `server/dist`
+  was built 14:24:49, `d1963b1` merged 15:18, and the built tree still proves it —
+  `server/dist/routes.js:272` mounts `/auth/google/callback` while `server/src/routes.ts:284`
+  says it is gone, and `curl https://grok.rahmanef.com/api/auth/google/callback` → `302`
+  against the `401` a current build would give. Do not "fix" that sentence.
+
+A path sweep of README, AGENTS, GEMINI and `docs/*.md` still lists paths, but every
+remaining hit is legitimate: another repo's files (`config.yaml`, `hermes_cli/auth.py`,
+`~/.cloudflared/config.yml`, `/home/antinrml/bin/…`, MSO's `lib/auth/session-cookie.ts`),
+dated backups, a deliberately-quoted old bundle name (`index-j_S061_x.js`), or a sibling
+repo's script (`scripts/seed-mso-password.mts` runs in `~/mso`).
+
+Re-run the sweep from the repo root:
+
+```bash
+node -e '
+const fs=require("fs"),cp=require("child_process");
+const files=cp.execSync("git ls-files").toString().trim().split("\n");
+const names=new Set(files.map(f=>f.split("/").pop()));
+const docs=["README.md","AGENTS.md","GEMINI.md",...fs.readdirSync("docs").filter(f=>f.endsWith(".md")).map(f=>"docs/"+f)];
+const re=/`([^`\s]+\.(?:ts|tsx|mjs|js|mts|py|css|json|sh|sql|yml|yaml))`/g;
+for(const d of docs) fs.readFileSync(d,"utf8").split("\n").forEach((line,i)=>{
+  let m; while((m=re.exec(line))){
+    const p=m[1];
+    if(p.includes("*")||fs.existsSync(p)||files.includes(p)||names.has(p.split("/").pop())) continue;
+    console.log(d+":"+(i+1), p);
+  }
+});'
+```
+
+It is not wired into CI on purpose: the remaining hits above are correct as written, so
+a gate would need a per-line allowlist that nobody would maintain.
 
 ## First commands for the next session
 
