@@ -99,18 +99,24 @@ test('every crawled write slug asks, so gutting WRITE_RE fails here', () => {
  * The one shape that would slip, and the six verbs that used to make it slip.
  *
  * These are not from the crawl: the crawl never produced `<read>_AND_<missing verb>`, which
- * is why the gap sat unmeasured for a session. Each case is the shape itself, so it fails
- * if any of the six verbs is dropped from WRITE_RE again. The right-hand side of each is a
- * real Composio write slug that already asked and still asks.
+ * is why the gap sat unmeasured for a session. Each case is the shape itself, so dropping
+ * that verb from WRITE_RE fails here. The right-hand side of each is a real Composio write
+ * slug that already asked and still asks, so the case cannot be satisfied by rejecting
+ * everything.
+ *
+ * One verb per case, and all six are covered — an earlier version had four cases for six
+ * verbs and claimed "all six" in its title, so dropping SCHEDULE or IMPORT failed nothing.
  */
 const READ_THEN_UNLISTED_WRITE = [
   ['SLACK_FETCH_MESSAGES_AND_APPEND', 'NOTION_APPEND_TEXT_BLOCKS'],
   ['GMAIL_LIST_THREADS_AND_LABEL', 'GMAIL_ADD_LABEL_TO_EMAIL'],
   ['HUBSPOT_SEARCH_CONTACTS_AND_UPSERT', 'SLACK_SCHEDULE_MESSAGE'],
   ['GITHUB_GET_ISSUE_AND_DUPLICATE', 'RESEND_CREATE_CONTACT_IMPORT'],
+  ['GMAIL_SEARCH_MESSAGES_AND_SCHEDULE', 'SLACK_SCHEDULE_MESSAGE'],
+  ['NOTION_FETCH_PAGE_AND_IMPORT', 'RESEND_CREATE_CONTACT_IMPORT'],
 ];
 
-test('a read verb followed by a write verb names asks, for all six verbs the crawl missed', () => {
+test('a read verb followed by each of the six write verbs asks', () => {
   const slipped = READ_THEN_UNLISTED_WRITE.filter(([slug]) => isReadOnlySlug(slug)).map(([s]) => s);
   assert.deepEqual(slipped, [], 'these would run unasked: ' + slipped.join(', '));
   // And the real write slugs are still writes, so this is not satisfied by rejecting all.
