@@ -478,9 +478,15 @@ auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full g
 `2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
 `node scripts/mobile-suites.mjs` green.
 
-Remaining known holes are the ones already recorded above, none of them new: the
-laptop's served build is stale, the VPS prod worktree trails `main`, and the audit's
-LOW/MEDIUM items (docs that described files deleted in `011649d`) are still open.
+Remaining known holes are the ones already recorded above, none of them new: the VPS
+`prod` worktree trails `main` and still serves the XSS, and the laptop's `server/dist`
+predates `d1963b1` so it still mounts `/auth/google/callback` (not exploitable there —
+`COMPOSIO_API_KEY` is unset). The audit's LOW/MEDIUM item — docs describing files
+`011649d` deleted — is **closed** as of `d1b9554`: `docs/xai-and-composio.md` §A.8 and
+§B.8 described the pre-Hermes design (app owned history, ran `responses.compact()`,
+passed function tools to `grok-4.7`, held a per-bot Composio session, received a signed
+webhook) and were rewritten against the code. The laptop's served *build* is current,
+which the older text in this paragraph got wrong.
 
 ## First commands for the next session
 
@@ -537,3 +543,23 @@ CI is unaffected: the workflow runs `npm run build` before this step.
 PR #14 (`/auth/google/callback` removal) was merged as `d1963b1`; it had been left
 `dirty` with zero checks because it predated PR #13, so the rebase onto `main` is what
 unblocked it, not a code change.
+
+## 2026-11-28: the audit's docs item, and why the first red run was not the code
+
+`PR #18` (`d1b9554`) closed the last LOW/MEDIUM item from the 2026-11-14 audit: the docs
+that described files `011649d` deleted. The real one was `docs/xai-and-composio.md`
+§A.8/§B.8, which stated ten things about *this* tree and got all ten wrong because the
+file predates the Hermes engine by four days. The table in the PR body is the diff
+between what it said and what `agent/loop.ts`, `mcp.ts` and `composio.ts` do.
+
+Two process notes worth keeping:
+
+- **A failing `npm test` in a `~/.t3/worktrees/` checkout is often just `node_modules`.**
+  All 22 test files reported `Cannot find package 'tsx'`, which reads like a broken
+  toolchain and is only a missing `npm ci` in a fresh worktree. Check that before
+  chasing a regression.
+- **Verify a doc claim by opening the cited line.** Several of the old sentences were
+  *plausible* against the code's own vocabulary (both "history" and "conversation" are
+  real), so reading the module header was not enough. `grep -n` for the exact symbol the
+  doc names — `store:`, `prompt_cache_key`, `enabledToolkits`, `proxyExecute` — settled
+  each one; `proxyExecute` has no caller at all, which is how item 8 got corrected too.
