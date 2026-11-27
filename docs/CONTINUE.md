@@ -18,7 +18,7 @@ to; being behind it is expected and not drift.
 
 | where | unit | worktree | port | hostname | build |
 |---|---|---|---|---|---|
-| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | **stale**: `web/dist` and `server/dist` are 2026-11-15 00:17, i.e. built from `b5ffa0d`, **46 commits behind** `2e06960` |
+| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | `web/dist` built 2026-11-27 14:24, `server/dist` 14:24:49; service restarted 15:02. **Current for `c09562c`**, i.e. it carries the phone-overlay and XSS fixes. `d1963b1` merged 15:18, so the `/auth/google/callback` removal is the one change not in it |
 | VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `cc6a22b`, `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com` |
 
 Older text in this file said "`.worktrees/prod` … `grokbot.service` … port 4000 behind
@@ -27,54 +27,66 @@ one, and this laptop does not have that worktree at all (`ss -ltn` here shows `8
 `4000`). The other way round: the laptop serves on `:8790` behind a Cloudflare tunnel, not
 Traefik.
 
-Both answer 200 today (`/api/health` on each hostname). The laptop's built assets are
-what is stale, and it is provable without guessing: `overlay.tsx` compiles the literal
-`max-width: 767px`. A fresh build of `2e06960` in a worktree has it
-(`web/dist/assets/index-DG9myLKb.js`, two occurrences); the bundle the laptop actually
-serves (`web/dist/assets/index-j_S061_x.js`) contains `767px` **zero** times. So the
-2026-11-26 phone-overlay fixes are not in what `grok.rahmanef.com` serves, even though
-they are on `main`. Rebuild and restart before claiming any mobile fix is live:
+**The laptop is no longer stale**, and the previous version of this section said it was.
+Measured 2026-11-27 15:56 against the running process (`pid 1040`, started 15:02:19):
+
+```bash
+curl -s localhost:8790/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'   # index-DG9myLKb.js
+grep -o 767px web/dist/assets/index-DG9myLKb.js | wc -l               # 2
+curl -s "localhost:8790/api/apps/callback?slug=gmail" | grep -o 'postMessage([^)]*'
+# postMessage({"type":"grokbot-connected","slug":"gmail","ok":true},"https://grok.rahmanef.com"
+```
+
+Two `767px` in the bundle that is actually served, and the `postMessage` target is the
+app origin rather than `'*'`. So the 2026-11-26 phone-overlay fixes and the `2e06960` XSS
+fix are both live on `grok.rahmanef.com`. The earlier text claimed `767px` appeared zero
+times and named `index-j_S061_x.js`, which is not the bundle `index.html` references.
+
+What is stale is narrower and harmless: `server/dist` was built at 14:24:49, before
+`d1963b1` merged at 15:18. Both hosts therefore still **mount** `/auth/google/callback`
+and answer `302 ?login=failed` there. It is not exploitable on either host, because
+`COMPOSIO_API_KEY` is unset in both `.env` files (`grep -c '^COMPOSIO_API_KEY=.'` → 0), so
+`googleProfile` throws and the handler falls to `loginFailed` before any row or session.
+Deploy is what closes it:
 
 ```bash
 cd /home/rahman/projects/manef/grokbot-clone
 npm run build && systemctl --user restart grokbot-clone.service
-curl -s localhost:8790/api/health
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8790/api/auth/google/callback   # 401 after
 ```
 
-That restart was **not** done in the 2026-11-27 session: it is a production deploy on a
-hostname other people may be using, so it needs an explicit go-ahead.
+That restart was **not** done in this session: it is a production deploy on a hostname
+other people may be using, so it needs an explicit go-ahead.
 
-### The XSS fix is on `main`, and neither live host has it
+### The XSS fix is on `main`, only the VPS lacks it
 
 `2e06960` closes the reflected XSS on `/api/apps/callback` (upstream `d382bc4`, which
-this fork's history predated). Checked against both live hostnames afterwards, not
+this fork's history predated). Measured 2026-11-27 15:57 against both live hostnames, not
 assumed:
 
 ```
 $ curl -s "$H/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E"
-grok.rahmanef.com   status=200, body contains <img src=x onerror=alert(1)>
-grok.antinrml.com   status=200, body contains <img src=x onerror=alert(1)>
+grok.rahmanef.com   status=200, slug dropped: `slug:""`, target `"https://grok.rahmanef.com"`
+grok.antinrml.com   status=200, body contains <img src=x onerror=alert(1)>, target `'*'`
 ```
 
-Both responses also carry no `Cache-Control` and no `X-Content-Type-Options`, i.e. both
-are still running pre-`2e06960` code. So **the hole is open on two public hostnames
-right now**: the laptop serves `b5ffa0d` (46 commits behind) and the VPS serves `cc6a22b`
-(12 behind; `git grep jsonForScript` there returns nothing). Either is reachable by a
-logged-in user's browser, and the script runs on that origin with their cookie in scope.
+So **the hole is open on one public hostname right now**: `grok.antinrml.com` serves
+`cc6a22b` (15 behind `manef/main`; `grep -c jsonForScript server/dist/routes.js` there →
+`0`). The laptop's earlier entry in this section said it served `b5ffa0d`; that was true
+before its 15:02 restart and is no longer. A logged-in user's browser hitting the VPS URL
+runs attacker script on that origin with their cookie in scope, and the response carries
+`content-type: text/html`, no CSP and no `nosniff`.
 
-Closing it in production is one deploy each, no config change:
+Closing it in production is one deploy, no config change:
 
 ```bash
-# this laptop — also makes the phone-overlay fixes live, see above
-cd /home/rahman/projects/manef/grokbot-clone
-npm run build && systemctl --user restart grokbot-clone.service
-
-# VPS
-ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod && git merge --ff-only main && npm run build && systemctl --user restart grokbot.service'
+# VPS only, now that the laptop is current
+ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod && git merge --ff-only manef/main && npm run build && systemctl --user restart grokbot.service'
 ```
 
-Neither was run here: they are production deploys on hostnames other people use, and the
-2026-11-27 sessions deliberately left that to an explicit go-ahead. Treat this paragraph
+Neither host was deployed in this session: they are production restarts on hostnames other
+people use, and the 2026-11-27 sessions deliberately left that to an explicit go-ahead.
+Treat this paragraph
 as the standing request for one.
 
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
@@ -478,10 +490,30 @@ ssh antinrml 'systemctl --user status grokbot.service --no-pager | head -5'
 
 Then work item 6's permanent fix if root access is available, or pick the next real
 feature. Items 1–5 are closed; item 2 is closed with a real-container script to
-reproduce. The only stale thing is the laptop's served build (see the two-deployment
-table above), and as of `2e06960` that staleness is a **live security problem**, not
-cosmetic: both public hostnames still answer the XSS payload. Deploying is the first
-thing worth asking about. Nothing here needs a product decision right now.
+reproduce. As of 2026-11-27 15:56 the laptop's build is current and no longer the stale one;
+what is stale is the VPS `prod` worktree. That is not cosmetic:
+
+```
+$ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
+... slug:"</script><img src=x onerror=alert(1)>" ... ,'*')}   <- verbatim, unescaped
+$ curl -s 'https://grok.rahmanef.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%3E'
+... slug:"" ... ,"https://grok.rahmanef.com")}                  <- slug dropped, origin pinned
+```
+
+So `grok.antinrml.com` still runs `cc6a22b` and is exploitable now: `content-type: text/html`,
+no CSP, no `nosniff`, and script running on that origin can call `/api/*` with the
+visitor's cookie (httpOnly stops reading it, not using it). `prod` has **0 commits of its
+own** (`git log manef/main..HEAD` → 0) and is 15 behind `manef/main`, so the fix is a pure
+fast-forward. Deploying it is the highest-value thing left, and it needs an explicit
+go-ahead because it restarts a hostname other people use:
+
+```bash
+ssh antinrml
+cd projects/grokbot-clone/.worktrees/prod
+git merge --ff-only manef/main && npm run build && systemctl --user restart grokbot.service
+```
+
+Nothing else here needs a product decision right now.
 
 ## 2026-11-27 (last): the mobile suites refuse a stale `web/dist`
 
