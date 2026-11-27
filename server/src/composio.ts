@@ -142,14 +142,22 @@ export function innerToolSlugs(name: string, args: any): string[] {
   return [name];
 }
 
-const READ_RE = /_(GET|LIST|SEARCH|FETCH|FIND|READ|RETRIEVE|QUERY|LOOKUP|CHECK|DESCRIBE|VIEW|COUNT)(_|$)/;
+export const READ_RE = /_(GET|LIST|SEARCH|FETCH|FIND|READ|RETRIEVE|QUERY|LOOKUP|CHECK|DESCRIBE|VIEW|COUNT)(_|$)/;
 /**
  * A read word alone is not enough. `GITHUB_CREATE_CHECK_RUN` contains `CHECK` and
  * creates something; `SLACK_SEND_MESSAGE_SEARCH`-shaped names exist too. Anything
  * that also names a write verb needs the user's approval, so a read-only match can
  * only auto-allow when no write verb is present.
+ *
+ * `APPEND|UPSERT|SCHEDULE|IMPORT|DUPLICATE|LABEL` were added after measuring the 110-slug
+ * catalog: none of them appears in a real auto-allowed slug, so widening the list moved
+ * zero reads onto the approval card (`allowlist-real-slugs.test.mjs` pins both halves —
+ * the six verbs now ask, and all 33 real auto-allowed slugs still auto-allow). They are
+ * here because the gap was *unmeasured*, not because it was exploited: `<read>_AND_<one>`
+ * is the shape that would slip, and Composio does use all six as write verbs
+ * (`NOTION_APPEND_TEXT_BLOCKS`, `SLACK_SCHEDULE_MESSAGE`, `GMAIL_ADD_LABEL_TO_EMAIL`).
  */
-const WRITE_RE = /_(CREATE|UPDATE|DELETE|REMOVE|SEND|POST|PUT|PATCH|ADD|INSERT|MOVE|COPY|UPLOAD|SET|EDIT|MODIFY|REPLY|FORWARD|INVITE|SHARE|ARCHIVE|TRASH|ENABLE|DISABLE|RUN|EXECUTE|START|STOP|CANCEL|APPROVE|MERGE|CLOSE|PUBLISH|ASSIGN|TRANSFER|PAY|REFUND|MARK)(_|$)/;
+const WRITE_RE = /_(CREATE|UPDATE|DELETE|REMOVE|SEND|POST|PUT|PATCH|ADD|INSERT|MOVE|COPY|UPLOAD|SET|EDIT|MODIFY|REPLY|FORWARD|INVITE|SHARE|ARCHIVE|TRASH|ENABLE|DISABLE|RUN|EXECUTE|START|STOP|CANCEL|APPROVE|MERGE|CLOSE|PUBLISH|ASSIGN|TRANSFER|PAY|REFUND|MARK|APPEND|UPSERT|SCHEDULE|IMPORT|DUPLICATE|LABEL)(_|$)/;
 export const isReadOnlySlug = (slug: string) => {
   const upper = slug.toUpperCase();
   return READ_RE.test(upper) && !WRITE_RE.test(upper);

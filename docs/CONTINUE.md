@@ -575,8 +575,8 @@ no check at all). All green, typecheck 0, build 0, mobile-suites all passed. The
 count is deliberately not repeated here: it was 200 before this, and read 222 once #24
 added two cases. Run `npm test` for the current number.
 
-**One caveat this port inherits from upstream, now measured rather than assumed.** The
-allowlist is a verb match, and `WRITE_RE` has no word for `APPEND`, `UPSERT`, `SCHEDULE`,
+**One caveat this port inherits from upstream, measured twice and now closed.** The
+allowlist is a verb match, and `WRITE_RE` had no word for `APPEND`, `UPSERT`, `SCHEDULE`,
 `IMPORT`, `DUPLICATE` or `LABEL`, so a slug shaped `<read>_AND_<one of those>` would
 auto-allow. Whether that shape occurs was tested against the live tool catalog rather
 than left as prose — 185 real slugs from 66 queries via `composio search`:
@@ -590,21 +590,29 @@ than left as prose — 185 real slugs from 66 queries via `composio search`:
 | …that `WRITE_RE` is what blocks | 8 |
 | real slugs containing `_AND_` | 0 |
 
-So the gap is theoretical: every one of the 88 auto-allowed slugs is a genuine read
+So the gap was theoretical: every one of the 88 auto-allowed slugs is a genuine read
 (`GMAIL_LIST_LABELS`, `STRIPE_LIST_REFUNDS`, `NOTION_RETRIEVE_PAGE`, …), and Composio
 names writes with verbs `WRITE_RE` already covers (`NOTION_APPEND_TEXT_BLOCKS`,
 `JIRA_ADD_COMMENT`, `SLACK_SCHEDULE_MESSAGE`, `GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND`
-all ask). Add the missing verbs if such a slug ever appears; do not widen the allowlist
-speculatively. Re-measure with:
+all ask). "Add the missing verbs if such a slug ever appears" was the wrong call to leave
+open, though: the six were **unmeasured**, not measured-safe, and the fix is free.
+
+All six verbs are now in `WRITE_RE`, and the cost was checked before it was paid. Against
+the local catalog (110 slugs written by `composio search` to
+`~/.composio/tool_definitions/`), adding them moves **0** reads onto the approval card:
+33 slugs auto-allowed before, 33 after, and none of the 33 names one of the six. The
+catalog is a developer-box artifact, so `allowlist-real-slugs.test.mjs` skips that case on
+CI and asserts the shape with invented slugs instead — which is the one place invented
+slugs are correct, because `<read>_AND_<verb>` is the failure shape and no real slug has
+it. Verified red by reverting `WRITE_RE` to the 37-verb list (1 of 5 cases fails), green
+after. Re-measure with:
 
 ```bash
 composio search "<use case>" --limit 15 --json   # then run the slugs through isReadOnlySlug
 ```
 
-Two limits on that number, so nobody reads it as stronger than it is. The 185 slugs are a
-sample of what those 66 phrasings surfaced, not the catalog. And `UPSERT`, `DUPLICATE`
-and `LABEL` never appeared in it at all, so those three verbs are untested rather than
-tested-and-safe — only `APPEND`, `ADD`, `SCHEDULE` and `SAVE` were seen in real slugs.
+One limit on the 185, so nobody reads it as stronger than it is: those slugs are a sample
+of what 66 phrasings surfaced, not the catalog.
 
 Note for anyone re-doing this: a boundary-less `READ` regex matches `SPREADSHEETS`, so
 test with the code's own `READ_RE` (which requires `_READ(_|$)`) or you will invent
