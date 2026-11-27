@@ -40,6 +40,11 @@ function hashPick<T>(id: string, list: T[]): T {
   return list[h % list.length];
 }
 
+/** JSON that is safe inside an inline <script>: `<` cannot close the tag, U+2028/2029 cannot break the statement. */
+export function jsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
 /** Thrown for things the user can fix; the message is shown to them. */
 class UserError extends Error {}
 
@@ -830,12 +835,15 @@ api.post('/apps/:slug/connect', async (c) => {
 
 api.get('/apps/callback', async (c) => {
   const userId = userFromCookieHeader(c.req.header('cookie'))?.id ?? '';
-  const slug = c.req.query('slug') ?? '';
+  const rawSlug = c.req.query('slug') ?? '';
+  // Unauthenticated and reflected into the page, so only a toolkit-slug shape is accepted.
+  const slugOk = /^[a-z0-9_-]{1,64}$/i.test(rawSlug);
+  const slug = slugOk ? rawSlug : '';
   const botId = c.req.query('bot');
   const seq = Number(c.req.query('seq') ?? 0);
   const ok = c.req.query('status') !== 'failed';
   const userExists = db.prepare('SELECT 1 FROM users WHERE id=?').get(userId);
-  if (userExists && ok) {
+  if (userExists && ok && slug) {
     const connected = await connectedToolkits(userId).catch(() => new Set<string>());
     if (connected.has(slug)) {
       hub.emit(userId, { type: 'connections' });
@@ -849,7 +857,13 @@ api.get('/apps/callback', async (c) => {
       }
     }
   }
-  return c.html(`<!doctype html><meta charset="utf-8"><title>Connected</title><body style="font-family:system-ui;padding:40px;text-align:center">${ok ? 'Connected. You can close this window.' : 'Connection failed.'}<script>try{window.opener&&window.opener.postMessage({type:'grokbot-connected',slug:${JSON.stringify(slug)},ok:${ok}},'*')}catch(e){};setTimeout(()=>window.close(),800)</script></body>`);
+  // `<` is escaped in the payload so it cannot close the script tag, and the post is
+  // addressed to our own origin instead of '*', so a foreign opener learns nothing.
+  const payload = jsonForScript({ type: 'grokbot-connected', slug, ok });
+  const target = jsonForScript(new URL(env.appUrl).origin);
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  return c.html(`<!doctype html><meta charset="utf-8"><title>Connected</title><body style="font-family:system-ui;padding:40px;text-align:center">${ok ? 'Connected. You can close this window.' : 'Connection failed.'}<script>try{window.opener&&window.opener.postMessage(${payload},${target})}catch(e){};setTimeout(()=>window.close(),800)</script></body>`);
 });
 
 api.delete('/apps/:slug', async (c) => {
