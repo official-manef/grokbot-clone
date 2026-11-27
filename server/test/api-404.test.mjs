@@ -108,4 +108,13 @@ test('a real route past the same mounting still answers', () => {
   assert.match(health.contentType, /application\/json/);
 });
 
+test('the CSRF gate runs before the 404, so a cross-site POST is refused as 403', () => {
+  // Registration order is the property: the catch-all is below the gate, so an unknown
+  // path cannot become 404 without passing it. If the catch-all moved above the gate,
+  // this would be 404 and the check that protects writes would never run.
+  const r = byPath['POST /api/definitely-not-a-route (foreign origin)'];
+  assert.equal(r.status, 403, 'a foreign origin is refused, not "not found"');
+  assert.match(r.contentType, /application\/json/);
+});
+
 test.after(() => fs.rmSync(webDist, { recursive: true, force: true }));

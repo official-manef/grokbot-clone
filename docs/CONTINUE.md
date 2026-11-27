@@ -35,12 +35,19 @@ test could miss it: the stack moved out of `index.ts` into `server/src/app.ts` a
 injectable so the test can point at a temp directory rather than depend on a `web/dist`
 that CI has not built yet when `npm test` runs.
 
-`server/test/api-404.test.mjs` (3 cases) drives the real app with a real built-web-shaped
-directory: `/` still serves the shell, `/api/auth/...` unknown answers `404 application/json`,
-`/api/bots/...` unknown answers `401` (the session wall, a refusal), and `/api/health`
-still answers from its own handler. Verified **red** by deleting the `app.all` line
-(`/api/auth/google/callback` answered `200`). `staff-only.test.mjs` now asserts `404`
-instead of `401`, because that is the answer the served stack gives.
+`server/test/api-404.test.mjs` (4 cases) drives the real app with a real
+built-web-shaped directory: `/` still serves the shell, `/api/auth/...` unknown answers
+`404 application/json`, `/api/bots/...` unknown answers `401` (the session wall, a
+refusal), `/api/health` still answers from its own handler, and a cross-site POST to an
+unknown path is `403` — which proves the CSRF gate is registered *before* the catch-all,
+so an unknown path cannot become 404 without passing it. Verified **red** in both
+directions: deleting the `app.all` line makes the removed route answer `200`, and moving
+it above `app.use('/api/*', …)` turns the foreign-origin POST from `403` into `404`.
+`staff-only.test.mjs` now asserts `404` instead of `401`, because that is the answer the
+served stack gives.
+
+Gates: `typecheck` 0, `npm test` 239/239 (235 before, +4 here), `build` 0, mobile-suites
+25/25 + 58/58 + 10/10.
 
 Verified against a real build, not only in-process:
 
