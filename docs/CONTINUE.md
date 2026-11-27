@@ -701,10 +701,22 @@ The gate at the top of `scripts/mobile-suites.mjs` only checked that
 every phone-overlay layout assertion fails for a reason unrelated to the code under
 review, and that is precisely how those failures were once misread as a regression.
 
-It now compares `web/src/**/*.{ts,tsx,css}` mtimes to the built index and exits 1 naming
-up to five newer files. `--check-dist` isolates the gate, so both directions are testable
-without a browser or a server (verified: fresh → rc 0, `touch web/src/main.tsx` → rc 1).
+It now compares build-input mtimes to the built index and exits 1 naming up to five newer
+files. `--check-dist` isolates the gate, so both directions are testable without a browser
+or a server (verified: fresh → rc 0; `touch web/index.html` → rc 1 naming it; rebuild → rc 0).
 CI is unaffected: the workflow runs `npm run build` before this step.
+
+**The first version of that gate was itself a false-green.** It globbed
+`web/src/**/*.{ts,tsx,css}` only, so `touch web/index.html` — the file whose `viewport`
+meta the mobile suites read to get 390/360 widths at all — left the gate reporting
+"fresh", and the suites then passed against the *previous* bundle. A stale-dist gate that
+misses an input is worse than no gate, because it certifies the wrong artifact.
+
+The input list is now `scripts/dist-freshness.mjs` (web/src, web/index.html, web/public,
+web/vite.config.ts) and `server/test/dist-freshness.test.mjs` drives `newerThanDist()`
+over real temp trees, one case per input plus a negative case for `server/src` (the web
+bundle reaches it only through erased `@shared` **type** imports). Five cases, and the
+`web/index.html` one is red against the old glob.
 
 PR #14 (`/auth/google/callback` removal) was merged as `d1963b1`; it had been left
 `dirty` with zero checks because it predated PR #13, so the rebase onto `main` is what
