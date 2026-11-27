@@ -3,6 +3,61 @@
 Written at the end of a long session so the next one starts informed rather than
 re-deriving context. Every claim below was verified, not remembered.
 
+## 2026-11-29: an unknown `/api/*` path answered the app shell with `200`
+
+Found while re-checking the removed `/auth/google/callback` route. `index.ts` registered
+its API sub-apps and then the SPA fallback (`app.use('/*', serveStatic)` +
+`app.get('*', …index.html)`). Hono carries on past a sub-app that matched nothing, so
+**every** unmatched `/api/*` path fell through to the page:
+
+```
+$ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8790/api/auth/nothing-here
+200 text/html; charset=UTF-8          # a page where an API answer belongs
+```
+
+Three consequences, all measured, none cosmetic:
+
+- `req()` in `web/src/lib/api.ts:16` calls `res.json()` on the response, so an unknown
+  API path surfaced as a parse error instead of "not found" — the error handler then
+  reported a JSON failure for a request that never had a JSON body.
+- "Does this route exist?" was unanswerable from outside: the removed
+  `/api/auth/google/callback` answered `200` with the shell (still `302` on both live
+  hosts, which serve a build older than the removal).
+- A test asserting a status could pass against a page. `staff-only.test.mjs`'s "route is
+  gone" case asserted `401`, which only the bare-`api` probe produced; the deployed stack
+  gave `200 text/html`. The probe mounted `api` alone, so it was testing a router that
+  nobody serves.
+
+The fix is one line in the composition — `app.all('/api/*', c => c.json({error:'not found'}, 404))`
+registered after the API sub-apps and before the static handler — plus the reason the
+test could miss it: the stack moved out of `index.ts` into `server/src/app.ts` as
+`createApp({ webDist? })`, and both `index.ts` and the probes now mount that. `webDist` is
+injectable so the test can point at a temp directory rather than depend on a `web/dist`
+that CI has not built yet when `npm test` runs.
+
+`server/test/api-404.test.mjs` (3 cases) drives the real app with a real built-web-shaped
+directory: `/` still serves the shell, `/api/auth/...` unknown answers `404 application/json`,
+`/api/bots/...` unknown answers `401` (the session wall, a refusal), and `/api/health`
+still answers from its own handler. Verified **red** by deleting the `app.all` line
+(`/api/auth/google/callback` answered `200`). `staff-only.test.mjs` now asserts `404`
+instead of `401`, because that is the answer the served stack gives.
+
+Verified against a real build, not only in-process:
+
+```
+$ DB_PATH=/tmp/x.db PORT=8899 node server/dist/index.js &
+/api/auth/google/callback   404 application/json {"error":"not found"}
+/api/auth/nothing-here      404 application/json {"error":"not found"}
+/api/definitely-not-a-route 401 application/json {"error":"unauthenticated"}
+/                           200 text/html     <!doctype html>…
+```
+
+Still open, unchanged by this: neither host serves this build. Both answer `200
+text/html` for `/api/auth/nothing-here` today, so the deploy in the paragraph below is
+what closes it.
+
+Gates: `typecheck` 0, `npm test` 238/238 (235 before, +3 here), `build` 0.
+
 ## 2026-11-28 (last): the schema lived in two `init*()` helpers, so the store needed the server booted
 
 Not a doc fix this time — a real bug that four test probes were papering over.
@@ -98,7 +153,7 @@ Deploy is what closes it:
 ```bash
 cd /home/rahman/projects/manef/grokbot-clone
 npm run build && systemctl --user restart grokbot-clone.service
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8790/api/auth/google/callback   # 401 after
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8790/api/auth/google/callback   # 404 on a current build (see the 2026-11-29 section)
 ```
 
 That restart was **not** done in this session: it is a production deploy on a hostname
@@ -528,13 +583,14 @@ in `findOrCreateUser` still refuses a non-staff address first, so nothing else c
 
 | before | after |
 |---|---|
-| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the 401 wall |
+| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the 404 catch-all (a 401 until 2026-11-29, when the SPA fallback that answered `200 text/html` was closed) |
 | `googleProfile()` reachable from a route | gone with the route |
 | `deleteConnection()` kept only for that route | gone |
 
-`staff-only.test.mjs` proves it by running the request: a mounted `/auth/*` route
-answers `302 ?login=failed`, so the `401` can only come from the catch-all below the
-auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full gates on
+`staff-only.test.mjs` proves it by running the request against `createApp()`: a mounted
+`/auth/*` route answers `302 ?login=failed`, and any other unmatched `/api/*` path behind
+the session wall answers `401`, so a `404` can only come from the catch-all below the API
+sub-apps. Confirmed red on the old code (`302 !== 404`) and green after. Full gates on
 `2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
 `node scripts/mobile-suites.mjs` green.
 
@@ -557,7 +613,7 @@ The audit's LOW/MEDIUM "docs describe files deleted in `011649d`" item is **clos
   was built 14:24:49, `d1963b1` merged 15:18, and the built tree still proves it —
   `server/dist/routes.js:272` mounts `/auth/google/callback` while `server/src/routes.ts:284`
   says it is gone, and `curl https://grok.rahmanef.com/api/auth/google/callback` → `302`
-  against the `401` a current build would give. Do not "fix" that sentence.
+  against the `404` a current build gives. Do not "fix" that sentence.
 
 A path sweep of README, AGENTS, GEMINI and `docs/*.md` still lists paths, but every
 remaining hit is legitimate: another repo's files (`config.yaml`, `hermes_cli/auth.py`,
