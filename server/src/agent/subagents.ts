@@ -9,12 +9,6 @@ import { getLive } from '../store.js';
  * message and reports back to the parent with send_to_bot when done.
  */
 
-export function initSubagents() {
-  for (const col of ['parent_bot_id TEXT', 'hidden INTEGER NOT NULL DEFAULT 0']) {
-    try { db.exec(`ALTER TABLE bots ADD COLUMN ${col}`); } catch { /* exists */ }
-  }
-}
-
 export function createSubagent(parentId: string, goal: string, label?: string) {
   const p = db.prepare('SELECT * FROM bots WHERE id=?').get(parentId) as any;
   if (!p) throw new Error('parent not found');

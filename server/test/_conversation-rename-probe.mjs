@@ -21,11 +21,6 @@ import crypto from 'node:crypto';
 const { api } = await import('../src/routes.ts');
 const { db } = await import('../src/db.ts');
 
-// index.ts does this at boot; createBot and the roster read those tables.
-const { initRooms } = await import('../src/agent/rooms.ts');
-const { initSubagents } = await import('../src/agent/subagents.ts');
-initRooms();
-initSubagents();
 
 const ownerKey = () =>
   crypto.createHmac('sha256', process.env.SESSION_SECRET ?? '').update('owner-login').digest('hex');

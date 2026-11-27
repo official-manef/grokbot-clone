@@ -16,13 +16,6 @@ const spec = JSON.parse(process.argv[2] ?? '{}');
 const { api } = await import('../src/routes.ts');
 const { db } = await import('../src/db.ts');
 
-// index.ts does this before serving; `createBot` counts agents with the `kind` and
-// `hidden` columns these migrations add, so a probe without them is not the app.
-const { initRooms } = await import('../src/agent/rooms.ts');
-const { initSubagents } = await import('../src/agent/subagents.ts');
-initSubagents();
-initRooms();
-
 const counts = () => ({
   users: db.prepare('SELECT COUNT(*) n FROM users').get().n,
   bots: db.prepare('SELECT COUNT(*) n FROM bots').get().n,

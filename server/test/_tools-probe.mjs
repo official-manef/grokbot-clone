@@ -33,17 +33,7 @@ try {
     case 'prompt': {
       // A throwaway database with one user and one bot, so the prompt can be
       // assembled without a live server. Nothing here touches the network.
-      // `hidden`, `kind` and `members` are read by store.ts and prompt.ts but are
-      // not in the CREATE TABLE in db.ts, so a fresh database needs them added
-      // here (a pre-existing migration gap, not part of this task).
       const { db } = await import('../src/db.ts');
-      for (const ddl of [
-        "hidden INTEGER NOT NULL DEFAULT 0",
-        "kind TEXT NOT NULL DEFAULT 'agent'",
-        "members TEXT NOT NULL DEFAULT '[]'",
-      ]) {
-        try { db.exec(`ALTER TABLE bots ADD COLUMN ${ddl}`); } catch { /* already there */ }
-      }
       db.prepare('INSERT INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run('u1', 'u@example.com', 'Sam', Date.now());
       db.prepare('INSERT INTO bots(id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)').run('b1', 'u1', 'Doug', Date.now(), Date.now());
       const { instructionsFor } = await import('../src/agent/prompt.ts');

@@ -18,11 +18,6 @@ const { api } = await import('../src/routes.ts');
 const { db } = await import('../src/db.ts');
 const { MAX_KEYS, poolSizes } = await import('../src/lib/rate-limit.ts');
 
-// index.ts does this at boot; createBot and prompt.ts read those columns.
-const { initRooms } = await import('../src/agent/rooms.ts');
-const { initSubagents } = await import('../src/agent/subagents.ts');
-initSubagents();
-initRooms();
 
 const ownerKey = () =>
   crypto.createHmac('sha256', process.env.SESSION_SECRET ?? '').update('owner-login').digest('hex');
