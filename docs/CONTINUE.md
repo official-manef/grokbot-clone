@@ -7,7 +7,7 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `853e5d2` | `0/0` in sync |
+| grokbot-clone | `projects/grokbot-clone` | `manef` = `official-manef/grokbot-clone` | `295d3ec` | `0/0` in sync |
 | mso | `projects/mso` | `origin` = `rahmanef63/mso` (SSH) | `fdd0c49f` | `0/0` in sync |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
@@ -16,13 +16,21 @@ machine pushes to; being "ahead 66 / behind 3" of it is expected and not drift.
 
 Production grokbot runs from `.worktrees/prod` (branch `prod`, user unit
 `grokbot.service`, port 4000 behind Traefik at `grok.antinrml.com`), fast-forwarded to
-`853e5d2` and built 2026-11-18 21:48. Live `:4000` (`pid 790744`) has its cwd in that
-worktree, so what serves is what is committed. Live MSO `:4005` (`pid 2606283`) serves a
-2026-11-19 13:18 build from `projects/mso` itself.
+`853e5d2` and built 2026-11-18 21:48. That build predates the nine commits merged since
+(`739a27f`..`295d3ec`: rename reachability, phone shell fixes, mobile suites in CI), so
+`prod` is behind `main` by nine. Live MSO `:4005` (`pid 2606283`) serves a 2026-11-19
+13:18 build from `projects/mso` itself.
 
-Working trees are clean. `npm test` in grokbot: **189 pass, 0 fail** (was 205; the 16
-removed cases belonged to modules that are gone). typecheck 0 errors.
-MSO: `tsc` clean, `lib/desktop` suite 32/32.
+Working trees are clean. `npm test` in grokbot: **192 pass, 0 fail**. typecheck 0
+errors. MSO: `tsc` clean, `lib/desktop` suite 32/32.
+
+**`npm test` now bounds its own parallelism** (`--test-concurrency=4`). `node --test`
+defaults to CPU count, and each of the 24 files forks `node --import tsx` children that
+each pay a TS compile. On this 16-core box under load ~150 that self-starved: 17 of 192
+cases failed at ~96s, every one a probe timeout, zero assertion failures. The same
+commit at concurrency 4: 192 pass in 20s. If a probe test ever reports a timeout, read
+the message — it now says whether the child was *killed* (the box was too loaded) or
+crashed (a real failure).
 
 **The "host has 0 docker images" claim in the previous version of this file was wrong.**
 The daemon works, 26 images were present, and `docker build -t grokbot-desktop:latest
