@@ -601,6 +601,11 @@ speculatively. Re-measure with:
 composio search "<use case>" --limit 15 --json   # then run the slugs through isReadOnlySlug
 ```
 
+Two limits on that number, so nobody reads it as stronger than it is. The 185 slugs are a
+sample of what those 66 phrasings surfaced, not the catalog. And `UPSERT`, `DUPLICATE`
+and `LABEL` never appeared in it at all, so those three verbs are untested rather than
+tested-and-safe — only `APPEND`, `ADD`, `SCHEDULE` and `SAVE` were seen in real slugs.
+
 Note for anyone re-doing this: a boundary-less `READ` regex matches `SPREADSHEETS`, so
 test with the code's own `READ_RE` (which requires `_READ(_|$)`) or you will invent
 false positives — that mistake is how this paragraph first claimed a live hole.
