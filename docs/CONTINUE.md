@@ -528,6 +528,34 @@ for(const d of docs) fs.readFileSync(d,"utf8").split("\n").forEach((line,i)=>{
 It is not wired into CI on purpose: the remaining hits above are correct as written, so
 a gate would need a per-line allowlist that nobody would maintain.
 
+## 2026-11-28 (later): four upstream hardening commits were never ported
+
+The 2026-11-14 audit is fully closed, so the last session read
+`upstream/main`'s `6546561` ("Rename to Orgo Teammates, remove third-party artwork,
+security hardening") and found four of its fixes that this fork predates and still
+lacks. All four were reachable in the build that serves today, not theoretical:
+
+| hole | what it allowed | fix |
+|---|---|---|
+| `isReadOnlySlug` matched a read verb anywhere | `GITHUB_CREATE_CHECK_RUN` read `CHECK` and auto-allowed, so a write ran with no ask | a write verb anywhere forces the ask |
+| `innerToolSlugs` returning `[]` meant "allow" | a `MULTI_EXECUTE` batch whose arguments did not parse ran entirely | no inner slugs → gate the meta tool under its own name |
+| other `COMPOSIO_*` meta tools were free | the remote workbench/bash run app actions from code, and the word-list match on their arguments was not a safety property | only `SEARCH_TOOLS` / `GET_TOOL_SCHEMAS` are exempt |
+| VNC `upgrade` never checked `Origin` | with `SameSite=None` (the embedded deployment), any site could open the socket with the visitor's cookie and drive a bot's desktop | same own-origin set as the HTTP CSRF middleware |
+| `/apps/callback` resumed any named bot | unauthenticated, so a callback URL started paid turns on someone else's account, and a replay did it again | resume only the pending connect card that started the flow, once |
+
+Tests drive the decisions rather than restate them: `approvals-policy.test.mjs` runs
+`policyFor` over 8 real calls (verified 3 red on the old code), `connect-resume.test.mjs`
+runs the exact predicate the route calls, and `vnc-origin.test.mjs` opens a real
+WebSocket upgrade against a real server (verified 2 red before, because the handler had
+no check at all). `npm test` went 200 → **220**, all green; typecheck 0, build 0,
+mobile-suites all passed.
+
+Not ported, deliberately: the rename to "Orgo Teammates", the artwork removal, the
+`HOST` bind option and the `ALLOWED_EMAILS` sign-up wall. The first three are cosmetic
+here (the box is bound by the tunnel, and the `.env` is not shipped), and the sign-up
+wall needs a product decision about who may register — the staff wall in
+`findOrCreateUser` already refuses non-staff addresses.
+
 ## 2026-11-28: the last documented open item was mis-stated, now closed
 
 Thread `mcp:6e42db7d…` died on a provider error mid-grep, not on a red suite. Its
