@@ -30,10 +30,20 @@ function run(kind, args, extraEnv) {
   // The prompt probe inserts a user and a bot, so two cases must not share a file.
   const db = path.join(os.tmpdir(), `hq-probe-${process.pid}-${++probeSeq}-${Math.random().toString(36).slice(2)}.db`);
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, ['--import', 'tsx', probe, kind, JSON.stringify(args)], { env: { ...env, DB_PATH: db, ...extraEnv }, timeout: 30_000 },
-      (err, stdout) => {
+    // 60s, the same budget as every other probe file. Each child pays a `tsx`
+    // compile, so a loaded box needs headroom no probe can earn back.
+    execFile(process.execPath, ['--import', 'tsx', probe, kind, JSON.stringify(args)], { env: { ...env, DB_PATH: db, ...extraEnv }, timeout: 60_000 },
+      (err, stdout, stderr) => {
         const line = stdout.split('\n').find((l) => l.startsWith('@@PROBE@@'));
-        if (!line) return reject(new Error(`no probe output: ${err?.message ?? ''} ${stdout.slice(0, 400)}`));
+        if (!line) {
+          // Say WHICH failure it was. A killed probe means the box was too loaded to
+          // boot tsx; a crashed one prints its own reason. "no probe output" alone
+          // sent two sessions hunting a code bug that did not exist.
+          const why = err?.killed
+            ? `probe killed at its 60s timeout (machine too loaded to boot tsx)`
+            : err?.message ?? 'probe printed nothing';
+          return reject(new Error(`${why}\n${stdout.slice(0, 400)}\n${stderr}`));
+        }
         resolve(JSON.parse(line.slice('@@PROBE@@'.length)));
       });
   });
