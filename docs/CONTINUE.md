@@ -79,9 +79,10 @@ as the standing request for one.
 
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
-Working trees are clean. `npm test` in grokbot: **196 pass, 0 fail** on `2e06960`
-(192 before, + 4 in `apps-callback.test.mjs`); `npm run typecheck` and `npm run build`
-exit 0, and `node scripts/mobile-suites.mjs` reports 25/25 + 58/58 + 10/10. The
+Working trees are clean. `npm test` in grokbot: **197 pass, 0 fail** on `2e06960` + the
+`/auth/google/callback` removal (192 before PR #10, +4 in `apps-callback.test.mjs`, +1 in
+`staff-only.test.mjs`); `npm run typecheck` and `npm run build` exit 0, and
+`node scripts/mobile-suites.mjs` reports 25/25 + 58/58 + 10/10. The
 `MSO: tsc clean, lib/desktop suite 32/32` line below is from 2026-11-20 and was **not**
 re-run on 2026-11-27 — treat it as inherited, not measured.
 
@@ -428,11 +429,39 @@ the route in a child process (env.ts resolves once per process, and the route mu
 mounted under `/api` exactly as `index.ts` mounts it), then parses the `postMessage` call
 back out of the returned HTML as data. Red 4/4 on the old code, green on the new.
 
-**Still open**: `/api/auth/google/callback` trusts `connected_account_id` from the query
-string with no TTL — the login-CSRF half of that same upstream commit. Its start route is
-gone (`server/src/composio.ts:149-152`), so no attempt row can be created and it cannot
-mint a session for a non-staff address. It is dead code that is also a hole; removing it
-means removing `googleProfile` too.
+**Then still open, now closed by the next paragraph**: `/api/auth/google/callback`
+trusted `connected_account_id` from the query string with no TTL — the login-CSRF half of
+that same upstream commit.
+
+## 2026-11-27 (later): the audit's last open hole, `/auth/google/callback`
+
+The audit of 2026-11-14 listed a login-CSRF on `/auth/google/callback`: it read
+`connected_account_id` straight from the query string, with no TTL and no cookie
+binding, so a caller holding their own live `login_attempts` row plus a victim's
+Composio account id could name both and be handed a session as that victim.
+
+The start half (`startGoogleLogin`) had already been deleted when AuthKit replaced the
+fan-facing Composio flow, so the route could not be reached by accident. That is not
+the same as closed: a handler whose only inputs are caller-supplied and whose only
+output is a session is one refactor away from being live again. Removed the route,
+`googleProfile`, and the `deleteConnection` it was the only caller of. The staff wall
+in `findOrCreateUser` still refuses a non-staff address first, so nothing else changes.
+
+| before | after |
+|---|---|
+| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the 401 wall |
+| `googleProfile()` reachable from a route | gone with the route |
+| `deleteConnection()` kept only for that route | gone |
+
+`staff-only.test.mjs` proves it by running the request: a mounted `/auth/*` route
+answers `302 ?login=failed`, so the `401` can only come from the catch-all below the
+auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full gates on
+`2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
+`node scripts/mobile-suites.mjs` green.
+
+Remaining known holes are the ones already recorded above, none of them new: the
+laptop's served build is stale, the VPS prod worktree trails `main`, and the audit's
+LOW/MEDIUM items (docs that described files deleted in `011649d`) are still open.
 
 ## First commands for the next session
 

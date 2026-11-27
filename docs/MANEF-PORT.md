@@ -37,6 +37,17 @@ count hits per client in a fixed window (`server/src/lib/rate-limit.ts`) and ans
 per address, because every engine on the host arrives from one address. The counter
 lives in process memory, so a restart forgives everyone.
 
+`/api/auth/google/callback` is **gone**, not merely inert. Its start half had already
+been deleted when AuthKit replaced the fan-facing Composio flow, so nothing could
+create the `login_attempts` row it read; but it still trusted `connected_account_id`
+from the query string with no TTL and no cookie binding, which is enough for a caller
+who holds their own live attempt plus a victim's Composio account id to be signed in
+as that victim. A route whose only inputs are caller-supplied and whose only output is
+a session is a liability even while its precondition is missing, so the handler,
+`googleProfile` and the `deleteConnection` it needed are removed. `staff-only.test.mjs`
+asserts the route is not mounted (it falls through to the 401 wall, where a mounted
+callback would have answered `302 ?login=failed`).
+
 The limiter has two pools that never share a map: `ip:` keys for pre-auth traffic and
 `user:`/`bot:` keys for authenticated traffic. They are separate because an
 unauthenticated caller can mint `ip:` keys at will, and a shared map would let that
