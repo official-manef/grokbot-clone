@@ -688,7 +688,7 @@ all ask). "Add the missing verbs if such a slug ever appears" was the wrong call
 open, though: the six were **unmeasured**, not measured-safe, and the fix is free.
 
 All six verbs are now in `WRITE_RE`, and the cost was checked before it was paid. Against
-the local catalog (110 slugs written by `composio search` to
+the local catalog (`composio search` writes one definition per slug to
 `~/.composio/tool_definitions/`), adding them moves **0** reads onto the approval card:
 33 slugs auto-allowed before, 33 after, and none of the 33 names one of the six. The
 catalog is a developer-box artifact, so `allowlist-real-slugs.test.mjs` skips that case on
@@ -698,7 +698,8 @@ it. Verified red by reverting `WRITE_RE` to the 37-verb list (1 of 5 cases fails
 after. Re-measure with:
 
 ```bash
-composio search "<use case>" --limit 15 --json   # then run the slugs through isReadOnlySlug
+ls ~/.composio/tool_definitions/*.json | wc -l    # catalog size; it was 112 on 2026-11-28
+composio search "<use case>" --limit 15 --json    # then run the slugs through isReadOnlySlug
 ```
 
 One limit on the 185, so nobody reads it as stronger than it is: those slugs are a sample
