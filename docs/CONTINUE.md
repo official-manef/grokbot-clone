@@ -7,7 +7,7 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `b24d833` | `0/0` in sync |
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `e20fcf4` | `0/0` in sync |
 | mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
@@ -545,7 +545,8 @@ What it was chasing is now closed honestly:
 `server/test/box-layout-docs.test.mjs` (3 cases) now reads the adapters directory,
 `box.ts`'s imports and the adapter's exported `createDockerBoxRuntime`, so the doc and
 the tree cannot drift apart silently. Verified red on the old `AGENTS.md` and green
-after; full gates at `b24d833`: typecheck 0, `npm test` 200/200, `build` 0.
+after; full gates: typecheck 0, `npm test` 200/200, `build` 0. Merged as PR #19 →
+`e20fcf4` (CI `success` on the PR head, and on `main` for `d1b9554` before it).
 
 One near-miss worth recording: while writing this I "verified" the laptop was current
 from `docs/CONTINUE.md`'s own earlier paragraph, and nearly corrected the accurate
