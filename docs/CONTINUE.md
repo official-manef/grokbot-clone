@@ -571,8 +571,19 @@ Tests drive the decisions rather than restate them: `approvals-policy.test.mjs` 
 `policyFor` over 8 real calls (verified 3 red on the old code), `connect-resume.test.mjs`
 runs the exact predicate the route calls, and `vnc-origin.test.mjs` opens a real
 WebSocket upgrade against a real server (verified 2 red before, because the handler had
-no check at all). `npm test` went 200 → **220**, all green; typecheck 0, build 0,
-mobile-suites all passed.
+no check at all). All green, typecheck 0, build 0, mobile-suites all passed. The suite
+count is deliberately not repeated here: it was 200 before this, and read 222 once #24
+added two cases. Run `npm test` for the current number.
+
+**One caveat this port inherits from upstream.** `isReadOnlySlug` allowlists by verb, and
+`WRITE_RE` has no word for `APPEND`, `UPSERT`, `SCHEDULE`, `IMPORT`, `DUPLICATE` or
+`LABEL`. A slug shaped `<read>_AND_<that verb>`, e.g. `JIRA_SEARCH_AND_APPEND_COMMENT`,
+therefore reads as read-only and auto-allows. This was found by reading the two regexes,
+not by exercising a real call, so it is **unverified**: there is no `COMPOSIO_API_KEY` on
+this laptop and no slug catalog in the tree, so whether Composio has a slug shaped that
+way could not be checked. Treat it as a hypothesis to test against the live tool list
+before trusting the allowlist, and prefer adding the missing verbs over widening
+`WRITE_RE` wholesale.
 
 Not ported, deliberately: the rename to "Orgo Teammates", the artwork removal, the
 `HOST` bind option and the `ALLOWED_EMAILS` sign-up wall. The first three are cosmetic
