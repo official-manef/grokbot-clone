@@ -28,15 +28,21 @@ one, and this laptop does not have that worktree at all (`ss -ltn` here shows `8
 Traefik.
 
 Both answer 200 today (`/api/health` on each hostname). The laptop's built assets are
-what is stale — its `web/dist/assets/index-j_S061_x.js` lacks `overlay.tsx`, so the
-2026-11-26 phone-overlay fixes are not in what `grok.rahmanef.com` serves. Rebuild and
-restart it before claiming any mobile fix is live:
+what is stale, and it is provable without guessing: `overlay.tsx` compiles the literal
+`max-width: 767px`. A fresh build of `7165c2a` in a worktree has it
+(`web/dist/assets/index-DG9myLKb.js`); the bundle the laptop actually serves
+(`web/dist/assets/index-j_S061_x.js`) contains `767px` **zero** times. So the
+2026-11-26 phone-overlay fixes are not in what `grok.rahmanef.com` serves, even though
+they are on `main`. Rebuild and restart before claiming any mobile fix is live:
 
 ```bash
 cd /home/rahman/projects/manef/grokbot-clone
 npm run build && systemctl --user restart grokbot-clone.service
 curl -s localhost:8790/api/health
 ```
+
+That restart was **not** done in the 2026-11-27 session: it is a production deploy on a
+hostname other people may be using, so it needs an explicit go-ahead.
 
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
