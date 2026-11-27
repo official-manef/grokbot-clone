@@ -164,5 +164,13 @@ addColumn('bots', 'engine_port', 'INTEGER');
 addColumn('bots', 'handback_at', 'INTEGER');
 addColumn('screens', 'width', 'INTEGER');
 addColumn('screens', 'height', 'INTEGER');
+// Group chats and subagents. These used to be added by initRooms()/initSubagents() at
+// boot, but `store.ts`, `prompt.ts` and `engine.ts` read them, so every entry point that
+// touched the store without going through index.ts threw `no such column: hidden`.
+// Schema belongs with the rest of the schema.
+addColumn('bots', 'kind', "TEXT NOT NULL DEFAULT 'agent'");
+addColumn('bots', 'members', 'TEXT');
+addColumn('bots', 'parent_bot_id', 'TEXT');
+addColumn('bots', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
 
 export const now = () => Date.now();

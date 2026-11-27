@@ -47,13 +47,8 @@ process.env.HERMES_URL = stub.baseUrl.replace(/\/v1$/, '');
 process.env.HERMES_KEY = 'test-key';
 
 const { db } = await import('../src/db.ts');
-const { initSubagents } = await import('../src/agent/subagents.ts');
-const { initRooms } = await import('../src/agent/rooms.ts');
 const { enqueue } = await import('../src/agent/loop.ts');
 
-// index.ts does this at boot; the queries in createBot and prompt.ts read those columns.
-initSubagents();
-initRooms();
 
 const T = `${Date.now()}${Math.round(Math.random() * 1e6)}`;
 const DAY = new Date().toISOString().slice(0, 10);

@@ -3,6 +3,40 @@
 Written at the end of a long session so the next one starts informed rather than
 re-deriving context. Every claim below was verified, not remembered.
 
+## 2026-11-28 (last): the schema lived in two `init*()` helpers, so the store needed the server booted
+
+Not a doc fix this time — a real bug that four test probes were papering over.
+
+`bots.kind`, `bots.members`, `bots.parent_bot_id` and `bots.hidden` were added by
+`initRooms()` / `initSubagents()`, which `index.ts` calls at boot. But the readers are
+`store.ts` (`listBots` … `COALESCE(hidden,0)=0`), `agent/prompt.ts` and `engine.ts`. So any
+entry point that loaded the store without going through `index.ts` threw on a **fresh**
+database:
+
+```
+$ DB_PATH=/tmp/fresh.db node --import tsx -e "...import store.ts, listBots('u1')..."
+SqliteError: no such column: hidden
+    at listBots (server/src/store.ts:50)
+```
+
+Production never saw it because the live DB predates those columns and `index.ts` migrates
+at boot. The tests almost did not see it either: `_staff-signin-probe.mjs`,
+`_conversation-rename-probe.mjs`, `_rate-limit-wiring-probe.mjs` and
+`_usage-quota-wiring-probe.mjs` each hand-called `initSubagents(); initRooms();` so their
+databases were not fresh in the way a new deployment's is. `_tools-probe.mjs` had no such
+call and said so in a comment — "a pre-existing migration gap, not part of this task" — then
+worked around it with three `ALTER TABLE`s of its own.
+
+The four columns moved into `db.ts` next to the other `addColumn` calls, the two `init*()`
+helpers are gone (and their call sites: `index.ts` plus five probes), and
+`_tools-probe.mjs` lost its private migration. `server/test/schema-fresh-db.test.mjs` drives
+the real store against a real empty file in its own process — `listBots`, the room/subagent
+columns, and a hidden child bot not being listed. Verified **3/3 red** with the four
+`addColumn` lines removed, green with them.
+
+Gates on this change: `npm run typecheck` 0, `npm test` 235/235 (232 before, +3 here), `npm run
+build` 0, `node scripts/mobile-suites.mjs` 25/25 + 58/58 + 10/10.
+
 ## Where the repos stand
 
 | Repo | Path | Remote |

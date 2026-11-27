@@ -13,12 +13,6 @@ import { appendRow } from '../store.js';
 
 const MAX_RESPONDERS = 3;
 
-export function initRooms() {
-  for (const col of ["kind TEXT NOT NULL DEFAULT 'agent'", 'members TEXT']) {
-    try { db.exec(`ALTER TABLE bots ADD COLUMN ${col}`); } catch { /* exists */ }
-  }
-}
-
 export const isRoom = (botId: string) => (db.prepare('SELECT kind FROM bots WHERE id=?').get(botId) as any)?.kind === 'room';
 
 export function roomMembers(roomId: string): { id: string; name: string }[] {
