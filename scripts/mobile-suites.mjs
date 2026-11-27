@@ -18,11 +18,12 @@
  * outside loopback and outside a staff-allowlisted address.
  *
  *   node scripts/mobile-suites.mjs
- *   node scripts/mobile-suites.mjs --keep   # leave the server up for debugging
+ *   node scripts/mobile-suites.mjs --keep        # leave the server up for debugging
+ *   node scripts/mobile-suites.mjs --check-dist  # only the freshness gate, then exit
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
@@ -63,6 +64,41 @@ const dist = path.join(root, 'web/dist/index.html');
 if (!existsSync(dist)) {
   console.error('[mobile-suites] web/dist/index.html is missing. Run `npm run build` first.');
   process.exit(1);
+}
+
+/**
+ * Existing is not the same as current.
+ *
+ * A `web/dist` built before the CSS it is supposed to prove makes every layout check
+ * below fail for a reason that has nothing to do with the code under review. That is
+ * exactly how the phone-overlay failures were misread once: the suite was blamed for a
+ * "regression" that was a dist 44 commits old. So compare source mtimes to the built
+ * index and refuse to run rather than report a stale verdict.
+ *
+ * `--check-dist` runs only this gate, which is how both directions are testable.
+ */
+const builtAt = statSync(dist).mtimeMs;
+const srcDir = path.join(root, 'web/src');
+const stale = readdirSync(srcDir, { recursive: true })
+  .filter((f) => /\.(tsx?|css)$/.test(f))
+  .map((f) => path.join(srcDir, f))
+  .filter((f) => {
+    const s = statSync(f);
+    return s.isFile() && s.mtimeMs > builtAt;
+  })
+  .slice(0, 5)
+  .map((f) => path.relative(root, f));
+if (stale.length) {
+  console.error(
+    '[mobile-suites] web/dist is older than its sources, so these results would be stale.\n' +
+      `  newer: ${stale.join(', ')}\n` +
+      '  Run `npm run build` first.',
+  );
+  process.exit(1);
+}
+if (process.argv.includes('--check-dist')) {
+  console.log('[mobile-suites] web/dist is newer than web/src');
+  process.exit(0);
 }
 
 const port = await freePort();
