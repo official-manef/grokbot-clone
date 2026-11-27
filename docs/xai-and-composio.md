@@ -4,6 +4,14 @@ Researched 2026-11-09 from the official docs only: `docs.x.ai` (its `llms.txt` i
 
 Labels: **[D]** = stated in the docs (a URL is given). **[I]** = inferred by us. Verify these before relying on them. **[R]** = our recommendation for Grokbot.
 
+> **Status of the `[R]` recommendations (2026-11-28).** This file is a vendor-docs research
+> record, not a description of the current tree. Parts A.1–A.7 and B.1–B.7 describe the xAI and
+> Composio APIs; A.8 and B.8 describe how Grokbot uses them and have been **corrected against
+> the post-`011649d` tree**, where the agent loop and history belong to Hermes and the app's
+> tools reach the engine over MCP. Any `[R]` line elsewhere that says Grokbot should own
+> history, run compaction, or pass function tools to `grok-4.7` predates that change and is
+> void.
+
 > Naming note: docs.x.ai now calls the company "SpaceXSI" in body text (for example "SpaceXSI's frontier model"). The API host is still `api.x.ai`, and the console is `console.x.ai`. [D] https://docs.x.ai/llms.txt
 
 ---
@@ -294,7 +302,8 @@ const plan = Plan.parse(JSON.parse(r.output_text));
 - Things that break the cache: editing, reordering or removing earlier items, dropping encrypted reasoning, and a timestamp at the top of the system prompt. Put static content first.
 
 **Context compaction** [D] https://docs.x.ai/developers/advanced-api-usage/context-compaction.md
-- `POST /v1/responses/compact` (`client.responses.compact({ model, input })`) returns one opaque compaction item. Spread it into the next request in place of the old history. **[R]** Use it as the Grokbot summarizer for long-running bots.
+- `POST /v1/responses/compact` (`client.responses.compact({ model, input })`) returns one opaque compaction item. Spread it into the next request in place of the old history.
+- **[R] Not applicable to Grokbot.** This describes a direct client that resends history. Grokbot sends one message per turn with `conversation:` and lets the Hermes gateway keep the history, so there is nothing here to compact; `agent/compaction/` was deleted in `947c7ae` for that reason.
 
 **Rate limits** [D] https://docs.x.ai/developers/rate-limits.md
 - Limits are per model, in RPS and TPM. RPS = RPM / 48, with a minimum of 2. Tiers are set by cumulative spend since 2026-01-01: T0 $0, T1 $50, T2 $250, T3 $1k, T4 $5k. Tiers never go down.
@@ -346,12 +355,40 @@ ws.onopen = () => ws.send(JSON.stringify({ type: 'session.update', session: {
 
 ### A.8 How Grokbot uses xAI
 
-1. **Agent loop:** each bot turn runs the A.3 loop on `grok-4.7` through the `openai` package. the app owns history in SQLite (`store:false`, encrypted reasoning kept as-is). `prompt_cache_key = bot_id:conversation_id`, `safety_identifier = sha256(user_id)`. Run compaction when context passes a budget we set (this project uses the token count of the previous call).
-2. **Effort policy:** `low` for computer-use step loops and routine tool calls, `medium` for chat, `high` for planning or "deep work" routines. Expose `xhigh` as an advanced bot setting.
-3. **Tools per turn:** our own functions (Orgo computer actions, shell, memory, `send_to_user`, `request_approval`, `send_to_bot`) plus the Composio tools from B.5. Add server-side `web_search` and `x_search` (cheap, citations included). Avoid xAI remote `mcp` for user apps, because xAI cannot apply our approvals (see B.5).
-4. **Computer use:** follow the A.5 pattern on the user's Orgo VM, one screen per bot.
-5. **Voice:** a browser or mobile client gets a 5-minute secret from our server and connects to `grok-voice-latest`. The voice agent gets a small relay toolset (`send_task`, `recall_messages`, `switch_bot`, `end_call`) that hands work to the text agent loop, the same split Grok Bot uses.
-6. **Background routines:** use the Batch API (20% off) only for non-interactive digest jobs. Everything else goes through the normal or WebSocket path.
+**This section is the pre-`011649d` design, not the current tree.** It was written when the
+app called `api.x.ai` itself and owned the loop. Since `011649d` the agent loop is Hermes'
+(`server/src/agent/loop.ts` posts to `{engine.url}/v1/responses`), so almost every item below
+describes a path that no longer exists. What is actually true now:
+
+1. **Agent loop: Hermes owns it, and it owns history too.** `agent/loop.ts:418` posts one new
+   message plus `conversation: hq-<bot>-g<generation>` and `store: true`; it never replays
+   history. There is no compaction module — `agent/compaction/` was deleted in `947c7ae`,
+   because the app does not own the history it would compact. `prompt_cache_key`,
+   `safety_identifier` and `store:false` are **gone**: those were the direct-client design.
+   The gateway (`engine.ts`) is configured, not called: it receives `api_mode` and the
+   endpoint's own credentials from `LLM_BASE_URL`/`LLM_API_KEY`.
+2. **Effort policy: one knob per bot, not per step.** `bots.effort` (`low|medium|high|xhigh`,
+   default `medium`) goes out as `model_options.reasoning_effort` on every turn for that bot
+   (`agent/loop.ts:431`), settable in Bot settings as "Thinking effort". Nothing picks an
+   effort per step, and titles/voice pin `low` for their own one-shot calls
+   (`agent/titles.ts`, `voice.ts`).
+3. **Tools per turn: app tools over MCP, not function schemas in the request.** Every engine
+   gets `POST /mcp/<botId>` (bearer token derived from `SESSION_SECRET`). The list is
+   `availableTools()` + the user's Composio tools (`mcp.ts:47-55`); a capability that is off is
+   absent from the list *and* refused at call time, so no capability error ever reaches the
+   model. `web_search` and `x_search` are advertised only when `SEARCH_BASE_URL` /
+   `LLM_X_SEARCH=1` are set.
+4. **Computer use: as built, not as projected.** A.5's function-tool pattern survives, but the
+   backend is chosen by `box.ts`: `docker` (default), `mso`, `orgo` or `disabled`. The computer,
+   browser, shell and `save_file` tools are dropped entirely when `DESKTOP_MODE=disabled`.
+5. **Voice: as built.** The browser gets a short-lived secret from
+   `POST /realtime/client_secrets` (`providers/speech.ts`), then talks to
+   `{REALTIME_BASE_URL}/realtime?model=…` (default `grok-voice-latest`). The relay toolset is
+   `send_task`, `recall_text_messages`, `search_conversations`, `peek_activity`,
+   `end_the_call` — not the four names this section used to list.
+6. **Background routines: cron and events, no Batch API.** `routines.ts` runs cron jobs
+   through `croner`; event routines arrive over Composio's realtime subscription
+   (`triggers.ts`), so no public webhook URL and no batch discount path exists.
 
 ---
 
@@ -667,14 +704,43 @@ Sessions are free to create. Triggers are billed per **delivered** event, and po
 
 ### B.8 How Grokbot uses Composio
 
-1. **Identity:** Grokbot runs its own sign-in (Google/GitHub OIDC through Better Auth or Auth.js). `users.id` is the Composio `user_id`. One Composio project per environment.
-2. **Marketplace (Apps page):** a server-cached `toolkits.get` list (logo, name, description, categories, managed vs BYO badge) with search and category filters, overlaid with `session.toolkits()` connection state. "Connect" calls `session.authorize(slug, { callbackUrl })` and redirects. The callback verifies the attempt plus `session.toolkits({ isConnected: true })`. Toolkits with `no_auth` are always available. Toolkits like Twitter/X need our own OAuth app.
-3. **Branding:** start on managed OAuth. Before launch, register Grokbot OAuth apps for Google, Slack and GitHub as custom auth configs, and set Connect Link branding.
-4. **Per-bot tool scope:** each bot stores `enabledToolkits` plus optional per-tool allow and deny lists, and gets one long-lived Composio session (`sessionId` on the bot). `session.update()` runs when the user changes the bot's apps. Broad bots use meta tools, and narrow role bots use the direct-tools preset.
-5. **Approvals:** set Composio `requireApproval` on `createHint`/`updateHint`/`destructiveHint`, plus explicit tool lists for sends and posts. `ComposioToolInputRequiredError` becomes a Grokbot approval card. The answer resumes the call with `inputResponses` and `requestState`. Computer and shell actions use Grokbot's own approval policy. Keep the Composio sandbox off.
-6. **Agent loop:** Composio tools are passed to `grok-4.7` as plain function tools alongside the Orgo computer tools. Every Composio call runs through `session.execute()`. xAI remote MCP is not used for user apps.
-7. **Routines:** the routine editor offers trigger types from `triggers.listTypes({ toolkits })` with a form generated from `getType().config`. Saving runs `triggers.create(user.id, slug, { connectedAccountId, triggerConfig })`. The single webhook verifies the signature, looks up the routine by `metadata.trigger_id`, and starts a bot run with the event as input. `composio.connected_account.expired` produces a "reconnect" card for the user.
-8. **Raw API gaps:** use `session.proxyExecute` / `tools.proxyExecute` for endpoints no tool covers (for example the "connected as" profile check).
+**This section is the pre-`011649d` design, not the current tree.** Items 4, 6 and 7 in
+particular describe a per-bot Composio session, plain function tools in the xAI request, and a
+public webhook, none of which exist. What is actually true now:
+
+1. **Identity:** sign-in is WorkOS AuthKit (`WORKOS_API_KEY` + `WORKOS_CLIENT_ID`, the default
+   when configured) or Composio's own managed Google flow (`AUTH_PROVIDER=composio`). There is
+   no Better Auth/Auth.js. `users.id` is the Composio `user_id` — `connectedToolkits(userId)`
+   and `sessionFor(userId)` key on it directly.
+2. **Marketplace (Apps page):** `catalog()` caches `toolkits.get` for 1 hour
+   (`composio.ts:40-62`), user-independent; the overlay is `connectedToolkits()` per request.
+   "Connect" calls `startConnect` → `session.authorize(slug, { callbackUrl })` and redirects.
+   The callback (`GET /api/apps/callback`) re-checks `connectedToolkits()` before it emits and
+   resumes the parked turn; the slug is validated against `/^[a-z0-9_-]{1,64}$/i` and dropped
+   otherwise.
+3. **Branding:** unchanged in intent — managed OAuth first, custom auth configs and Connect
+   Link branding before launch. No code either way.
+4. **Per-bot tool scope: does not exist.** A session is per **user**, not per bot
+   (`composio_sessions` keyed on `user_id`, `composio.ts:94-104`). Every bot of that user sees
+   the same Composio tool list; there is no `enabledToolkits` column and no `session.update()`.
+   Scope is enforced per tool name instead, by the approval policy below.
+5. **Approvals:** Grokbot's own policy, not Composio's `requireApproval`. `policyFor()` in
+   `agent/tools.ts` classifies a call: a read-only slug runs at once, anything else posts an
+   approval card and the MCP call waits. `COMPOSIO_REMOTE_WORKBENCH`/`COMPOSIO_REMOTE_BASH_TOOL`
+   are treated as writes when their arguments reach for `run_composio_tool`/`proxy_execute`,
+   so the sandbox cannot run app actions around the per-slug check. Answering the card unblocks
+   the parked promise; no `inputResponses`/`requestState` round trip is involved.
+6. **Agent loop:** Composio tools are served to the engine over MCP (`POST /mcp/<botId>`), never
+   as function tools in a model request, because the model is Hermes'. `listTools()` filters the
+   session's tools to `type === 'function'` and drops any name that collides with an app tool;
+   every call goes through `session.execute(name, args)`.
+7. **Event routines:** the routine editor lists types from `triggers.listTypes({ toolkits })`
+   and creates with `triggers.create(userId, slug, { triggerConfig })`. Delivery is Composio's
+   realtime subscription (`triggers.subscribe`), matched by `trigger_id` in the `routines`
+   table — **no public webhook URL and no signature check**, because there is no webhook.
+8. **Raw API gaps:** no helper exists. `proxyExecute` is documented by Composio but nothing in
+   `server/src` calls it, so an endpoint no tool covers needs a new function in `composio.ts`
+   first.
 
 ---
 
