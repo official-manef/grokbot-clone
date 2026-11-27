@@ -20,8 +20,11 @@
  * the catalog over a different path), so a full refresh is not automated here.
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-import { isReadOnlySlug } from '../src/composio.ts';
+import { isReadOnlySlug, READ_RE } from '../src/composio.ts';
 
 /** Straight from the crawl. Every one of these is a read. */
 const READS = [
@@ -90,6 +93,55 @@ test('every crawled write slug asks, so gutting WRITE_RE fails here', () => {
     [],
     'these writes would run without an approval card: ' + slipped.join(', '),
   );
+});
+
+/**
+ * The one shape that would slip, and the six verbs that used to make it slip.
+ *
+ * These are not from the crawl: the crawl never produced `<read>_AND_<missing verb>`, which
+ * is why the gap sat unmeasured for a session. Each case is the shape itself, so it fails
+ * if any of the six verbs is dropped from WRITE_RE again. The right-hand side of each is a
+ * real Composio write slug that already asked and still asks.
+ */
+const READ_THEN_UNLISTED_WRITE = [
+  ['SLACK_FETCH_MESSAGES_AND_APPEND', 'NOTION_APPEND_TEXT_BLOCKS'],
+  ['GMAIL_LIST_THREADS_AND_LABEL', 'GMAIL_ADD_LABEL_TO_EMAIL'],
+  ['HUBSPOT_SEARCH_CONTACTS_AND_UPSERT', 'SLACK_SCHEDULE_MESSAGE'],
+  ['GITHUB_GET_ISSUE_AND_DUPLICATE', 'RESEND_CREATE_CONTACT_IMPORT'],
+];
+
+test('a read verb followed by a write verb names asks, for all six verbs the crawl missed', () => {
+  const slipped = READ_THEN_UNLISTED_WRITE.filter(([slug]) => isReadOnlySlug(slug)).map(([s]) => s);
+  assert.deepEqual(slipped, [], 'these would run unasked: ' + slipped.join(', '));
+  // And the real write slugs are still writes, so this is not satisfied by rejecting all.
+  for (const [, real] of READ_THEN_UNLISTED_WRITE) {
+    assert.equal(isReadOnlySlug(real), false, real);
+  }
+});
+
+/**
+ * The measurement, run against the local catalog when it exists.
+ *
+ * `composio search` writes one tool definition per slug to `~/.composio/tool_definitions`.
+ * It is present on a developer box and absent on CI, so this case skips rather than
+ * failing there — a catalog assertion that needs a login is not a CI gate. What it guards
+ * is the premise of the paragraph above: that widening WRITE_RE costs no real read.
+ */
+test('no real catalog read is pushed onto the approval card', (t) => {
+  const dir = path.join(os.homedir(), '.composio', 'tool_definitions');
+  if (!fs.existsSync(dir)) return t.skip('no local Composio catalog');
+  const slugs = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5));
+  assert.ok(slugs.length > 20, 'catalog too small to mean anything: ' + slugs.length);
+  // Every slug whose name pairs a read verb with one of the six now asks; none of those
+  // are reads in this catalog. Stated as a count so a regression names itself.
+  const nowAsking = slugs.filter((s) => READ_RE.test(s) && !isReadOnlySlug(s));
+  const allowed = slugs.filter(isReadOnlySlug);
+  assert.deepEqual(
+    allowed.filter((s) => /_(APPEND|UPSERT|SCHEDULE|IMPORT|DUPLICATE|LABEL)(_|$)/.test(s)),
+    [],
+    'a real auto-allowed slug names one of the six write verbs',
+  );
+  assert.ok(nowAsking.length > 0 && allowed.length > 0, 'catalog produced no verdicts');
 });
 
 test('a read word inside a longer word does not count, which is what saved SPREADSHEETS', () => {
