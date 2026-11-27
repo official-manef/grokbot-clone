@@ -5,11 +5,23 @@ re-deriving context. Every claim below was verified, not remembered.
 
 ## Where the repos stand
 
-| Repo | Path | Remote | HEAD | vs remote |
-|---|---|---|---|---|
-| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `e20fcf4` | `0/0` in sync |
-| mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
-| nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
+| Repo | Path | Remote |
+|---|---|---|
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` |
+| mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) |
+| nakama | `projects/lara/nakama` | `rahmanef63/nakama` |
+
+This table used to carry a HEAD column, and it was wrong in every commit that ever had it:
+writing a SHA into a file and committing that file makes the SHA its own parent, so the
+recorded value was always one commit stale the instant it landed. Four separate PRs
+(`3864292`, `e20fcf4`, `ccedf9e`, and the earlier rewrite) each re-moved that one number,
+which is a fix that recreates the bug it fixes. Ask git instead:
+
+```bash
+for r in ~/projects/manef/grokbot-clone ~/mso ~/projects/lara/nakama; do
+  printf '%-40s ' "$r"; git -C "$r" log --oneline -1
+done
+```
 
 `upstream` in grokbot is `nickvasilescu/grokbot-clone`, not a fork this machine pushes
 to; being behind it is expected and not drift.
@@ -546,7 +558,15 @@ What it was chasing is now closed honestly:
 `box.ts`'s imports and the adapter's exported `createDockerBoxRuntime`, so the doc and
 the tree cannot drift apart silently. Verified red on the old `AGENTS.md` and green
 after; full gates: typecheck 0, `npm test` 200/200, `build` 0. Merged as PR #19 →
-`e20fcf4` (CI `success` on the PR head, and on `main` for `d1b9554` before it).
+`e20fcf4` (CI `success` on the PR head, and on `main` for `d1b9554` before it), and the
+follow-up that this paragraph itself made necessary — the merged SHA it names — as PR
+#21 → `ccedf9e`.
+
+That last one was a self-inflicted loop, now broken at the root. A doc cannot record the
+HEAD of the commit that contains it: writing the SHA and committing it makes the SHA its
+own parent. Checked, and the table was wrong in **every** commit that ever had a HEAD
+column — each one named its parent (`d1963b1` in `c7b8deb`…`b7dda78`, `b24d833` in
+`e20fcf4`, `e20fcf4` in `ccedf9e`). The column is gone; the file now says to ask git.
 
 One near-miss worth recording: while writing this I "verified" the laptop was current
 from `docs/CONTINUE.md`'s own earlier paragraph, and nearly corrected the accurate

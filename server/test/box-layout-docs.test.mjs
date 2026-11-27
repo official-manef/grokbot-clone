@@ -49,3 +49,32 @@ test('desktop.ts is wiring over adapters/docker.ts, not its own implementation',
   assert.match(adapter, /createDockerBoxRuntime/);
   assert.match(desktop, /\bcreateDockerBoxRuntime\b/);
 });
+
+test('the handoff does not try to record its own HEAD', () => {
+  // A file cannot contain the SHA of the commit that contains it: committing the SHA
+  // makes it its own parent, so the value is stale the instant it lands. That column
+  // was wrong in every commit that had it, and four PRs each re-moved the one number.
+  const doc = read('docs/CONTINUE.md');
+  const start = doc.indexOf('## Where the repos stand');
+  assert.ok(start >= 0, 'CONTINUE.md must still have a repo-status section');
+
+  // Scope to that section: SHAs quoted in prose are fine, a status table is not.
+  // Both `## ` and `### ` end it — the deployments table below is a separate claim.
+  const ends = [doc.indexOf('\n## ', start + 1), doc.indexOf('\n### ', start + 1)].filter((i) => i !== -1);
+  const section = doc.slice(start, ends.length ? Math.min(...ends) : undefined);
+
+  const rows = section.split('\n').filter((l) => l.trim().startsWith('|'));
+  assert.ok(rows.length >= 3, 'expected a markdown table with a header and rows');
+
+  const header = rows[0];
+  assert.doesNotMatch(header, /\bHEAD\b/i, 'the repo table must not carry a HEAD column');
+  assert.doesNotMatch(header, /vs remote/i, 'or a drift column that only a SHA can fill');
+
+  for (const row of rows.slice(2)) {
+    assert.doesNotMatch(
+      row,
+      /`[0-9a-f]{7,40}`/,
+      `repo row records a commit SHA, which cannot be correct: ${row}`,
+    );
+  }
+});
