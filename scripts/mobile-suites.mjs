@@ -23,12 +23,13 @@
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { newerThanDist } from './dist-freshness.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const keep = process.argv.includes('--keep');
@@ -72,32 +73,25 @@ if (!existsSync(dist)) {
  * A `web/dist` built before the CSS it is supposed to prove makes every layout check
  * below fail for a reason that has nothing to do with the code under review. That is
  * exactly how the phone-overlay failures were misread once: the suite was blamed for a
- * "regression" that was a dist 44 commits old. So compare source mtimes to the built
- * index and refuse to run rather than report a stale verdict.
+ * "regression" that was a dist 44 commits old. So compare build-input mtimes to the
+ * built index and refuse to run rather than report a stale verdict.
+ *
+ * The input list lives in `dist-freshness.mjs` so a test can drive it; it covers
+ * `web/index.html` too, which the first version of this gate missed.
  *
  * `--check-dist` runs only this gate, which is how both directions are testable.
  */
-const builtAt = statSync(dist).mtimeMs;
-const srcDir = path.join(root, 'web/src');
-const stale = readdirSync(srcDir, { recursive: true })
-  .filter((f) => /\.(tsx?|css)$/.test(f))
-  .map((f) => path.join(srcDir, f))
-  .filter((f) => {
-    const s = statSync(f);
-    return s.isFile() && s.mtimeMs > builtAt;
-  })
-  .slice(0, 5)
-  .map((f) => path.relative(root, f));
+const stale = newerThanDist(root);
 if (stale.length) {
   console.error(
-    '[mobile-suites] web/dist is older than its sources, so these results would be stale.\n' +
+    '[mobile-suites] web/dist is older than its build inputs, so these results would be stale.\n' +
       `  newer: ${stale.join(', ')}\n` +
       '  Run `npm run build` first.',
   );
   process.exit(1);
 }
 if (process.argv.includes('--check-dist')) {
-  console.log('[mobile-suites] web/dist is newer than web/src');
+  console.log('[mobile-suites] web/dist is newer than every build input');
   process.exit(0);
 }
 
