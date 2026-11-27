@@ -7,7 +7,7 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `7165c2a` | `0/0` in sync |
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `2e06960` | `0/0` in sync |
 | mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
@@ -18,7 +18,7 @@ to; being behind it is expected and not drift.
 
 | where | unit | worktree | port | hostname | build |
 |---|---|---|---|---|---|
-| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | **stale**: `web/dist` and `server/dist` are 2026-11-15 00:17, i.e. built from `b5ffa0d`, **44 commits behind** `7165c2a` |
+| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | **stale**: `web/dist` and `server/dist` are 2026-11-15 00:17, i.e. built from `b5ffa0d`, **46 commits behind** `2e06960` |
 | VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `cc6a22b`, `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com` |
 
 Older text in this file said "`.worktrees/prod` … `grokbot.service` … port 4000 behind
@@ -29,9 +29,9 @@ Traefik.
 
 Both answer 200 today (`/api/health` on each hostname). The laptop's built assets are
 what is stale, and it is provable without guessing: `overlay.tsx` compiles the literal
-`max-width: 767px`. A fresh build of `7165c2a` in a worktree has it
-(`web/dist/assets/index-DG9myLKb.js`); the bundle the laptop actually serves
-(`web/dist/assets/index-j_S061_x.js`) contains `767px` **zero** times. So the
+`max-width: 767px`. A fresh build of `2e06960` in a worktree has it
+(`web/dist/assets/index-DG9myLKb.js`, two occurrences); the bundle the laptop actually
+serves (`web/dist/assets/index-j_S061_x.js`) contains `767px` **zero** times. So the
 2026-11-26 phone-overlay fixes are not in what `grok.rahmanef.com` serves, even though
 they are on `main`. Rebuild and restart before claiming any mobile fix is live:
 
@@ -44,10 +44,44 @@ curl -s localhost:8790/api/health
 That restart was **not** done in the 2026-11-27 session: it is a production deploy on a
 hostname other people may be using, so it needs an explicit go-ahead.
 
+### The XSS fix is on `main`, and neither live host has it
+
+`2e06960` closes the reflected XSS on `/api/apps/callback` (upstream `d382bc4`, which
+this fork's history predated). Checked against both live hostnames afterwards, not
+assumed:
+
+```
+$ curl -s "$H/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E"
+grok.rahmanef.com   status=200, body contains <img src=x onerror=alert(1)>
+grok.antinrml.com   status=200, body contains <img src=x onerror=alert(1)>
+```
+
+Both responses also carry no `Cache-Control` and no `X-Content-Type-Options`, i.e. both
+are still running pre-`2e06960` code. So **the hole is open on two public hostnames
+right now**: the laptop serves `b5ffa0d` (46 commits behind) and the VPS serves `cc6a22b`
+(12 behind; `git grep jsonForScript` there returns nothing). Either is reachable by a
+logged-in user's browser, and the script runs on that origin with their cookie in scope.
+
+Closing it in production is one deploy each, no config change:
+
+```bash
+# this laptop — also makes the phone-overlay fixes live, see above
+cd /home/rahman/projects/manef/grokbot-clone
+npm run build && systemctl --user restart grokbot-clone.service
+
+# VPS
+ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod && git merge --ff-only main && npm run build && systemctl --user restart grokbot.service'
+```
+
+Neither was run here: they are production deploys on hostnames other people use, and the
+2026-11-27 sessions deliberately left that to an explicit go-ahead. Treat this paragraph
+as the standing request for one.
+
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
-Working trees are clean. `npm test` in grokbot: **192 pass, 0 fail**, re-run 2026-11-27
-on `7165c2a` at load ~33 (24s); `npm run typecheck` and `npm run build` exit 0. The
+Working trees are clean. `npm test` in grokbot: **196 pass, 0 fail** on `2e06960`
+(192 before, + 4 in `apps-callback.test.mjs`); `npm run typecheck` and `npm run build`
+exit 0, and `node scripts/mobile-suites.mjs` reports 25/25 + 58/58 + 10/10. The
 `MSO: tsc clean, lib/desktop suite 32/32` line below is from 2026-11-20 and was **not**
 re-run on 2026-11-27 — treat it as inherited, not measured.
 
@@ -257,9 +291,10 @@ text in this section was wrong in both directions:
 
 - grokbot **on this laptop**: `main` only. There is no `prod` branch here; the deploy
   branch of that name lives on the VPS (`ssh antinrml 'git -C
-  projects/grokbot-clone branch -a'`). What also sits here is seven `t3/*` branches, one
-  per recovery worktree under `~/.t3/worktrees/grokbot-clone/`; they are not part of the
-  product, and removing them means removing those worktrees first.
+  projects/grokbot-clone branch -a'`). What also sits here is ten `t3/*` branches against
+  ten worktrees under `~/.t3/worktrees/grokbot-clone/` (re-measured 2026-11-27 after the
+  PR #12 session); they are not part of the product, and removing them means removing
+  those worktrees first.
 - grokbot remote `origin` (`official-manef`): `main`, `feat/mso-runtime`, `ci/mobile-suites`,
   `qa/mobile-overlays`, `test/rename-route` — the last three are merged and could be
   deleted, but deleting a merged branch is cosmetic and nobody asked.
@@ -370,6 +405,35 @@ Verified on this laptop 2026-11-27: `npm test` 192 pass / 0 fail in 24s at load 
 `npm run typecheck` and `npm run build` exit 0, and CI `success` on `7165c2a`
 (`npm ci`, typecheck, test, build, playwright install, `mobile-suites`).
 
+## 2026-11-27 (later): the audit's XSS item, and why it was still open
+
+The 2026-11-14 audit listed a reflected XSS on `/api/apps/callback`. It was real, and it
+survived every session since because **this fork's history predates the upstream fix**:
+`d382bc4` (2026-11-18) is on `upstream/main` and is not an ancestor of anything here.
+
+What was wrong, all three in the same response:
+
+| defect | consequence |
+|---|---|
+| `slug` interpolated into an inline `<script>` | `?slug=</script><img src=x onerror=alert(1)>` ran script on our origin, session cookie in scope |
+| `postMessage(...,'*')` | any window that opened the OAuth popup received the payload |
+| no `Cache-Control` / `nosniff` | a cookie-dependent page left cacheable |
+
+Fixed in `2e06960` (PR #12): `jsonForScript()` escapes `<`/U+2028/U+2029, a slug outside
+`/^[a-z0-9_-]{1,64}$/i` is dropped rather than echoed, the post targets
+`new URL(env.appUrl).origin`, and the two headers are set.
+
+The test is `server/test/apps-callback.test.mjs` plus `_apps-callback-probe.mjs`. It drives
+the route in a child process (env.ts resolves once per process, and the route must be
+mounted under `/api` exactly as `index.ts` mounts it), then parses the `postMessage` call
+back out of the returned HTML as data. Red 4/4 on the old code, green on the new.
+
+**Still open**: `/api/auth/google/callback` trusts `connected_account_id` from the query
+string with no TTL — the login-CSRF half of that same upstream commit. Its start route is
+gone (`server/src/composio.ts:149-152`), so no attempt row can be created and it cannot
+mint a session for a non-staff address. It is dead code that is also a hole; removing it
+means removing `googleProfile` too.
+
 ## First commands for the next session
 
 ```bash
@@ -386,4 +450,6 @@ ssh antinrml 'systemctl --user status grokbot.service --no-pager | head -5'
 Then work item 6's permanent fix if root access is available, or pick the next real
 feature. Items 1–5 are closed; item 2 is closed with a real-container script to
 reproduce. The only stale thing is the laptop's served build (see the two-deployment
-table above). Nothing here needs a product decision right now.
+table above), and as of `2e06960` that staleness is a **live security problem**, not
+cosmetic: both public hostnames still answer the XSS payload. Deploying is the first
+thing worth asking about. Nothing here needs a product decision right now.
