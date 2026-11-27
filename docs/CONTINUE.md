@@ -148,7 +148,7 @@ Three "open" items turned out to be already closed, and one real gap was closed.
    returns `null` for this provider on purpose). A snapshot of the store taken before the
    write sits at `/tmp/opencode/infra-before-restore.json` (0600, temporary).
 
-   `npx tsx` cannot run in `projects/mso` — npm fails with `EOVERRIDE` on a `postcss`
+   `npx tsx` cannot run in `~/mso` — npm fails with `EOVERRIDE` on a `postcss`
    override, so the script was run with `bun run`. That is a pre-existing npm/bun
    lockfile disagreement, not something this session introduced.
 
@@ -250,14 +250,22 @@ session to it.
 
 ### 5. Stale branches
 
-Cleaned up. What remains is only what is still doing work:
+What remains is only what is still doing work — re-measured 2026-11-27, because the old
+text in this section was wrong in both directions:
 
-- grokbot local: `main`, `prod` (deploy branch, checked out in `.worktrees/prod`).
-- grokbot remote `manef/`: `main` and `feat/mso-runtime`, kept at the owner's choice.
-  That branch is the **pre-Hermes architecture** — its `agent/loop.ts` calls
-  `xai.responses.create` directly and owns history via `llm_items`/`memory.ts`
-  (`maybeCompact`, `pickSplit`). Nothing in it is "work that was forgotten"; it is the
-  design Hermes replaced. Do not rebase it onto `main` hoping to recover features.
+- grokbot **on this laptop**: `main` only. There is no `prod` branch here; the deploy
+  branch of that name lives on the VPS (`ssh antinrml 'git -C
+  projects/grokbot-clone branch -a'`). What also sits here is seven `t3/*` branches, one
+  per recovery worktree under `~/.t3/worktrees/grokbot-clone/`; they are not part of the
+  product, and removing them means removing those worktrees first.
+- grokbot remote `origin` (`official-manef`): `main`, `feat/mso-runtime`, `ci/mobile-suites`,
+  `qa/mobile-overlays`, `test/rename-route` — the last three are merged and could be
+  deleted, but deleting a merged branch is cosmetic and nobody asked.
+  `feat/mso-runtime` is kept at the owner's choice: it is the **pre-Hermes architecture**,
+  its `agent/loop.ts` calls `xai.responses.create` directly and owns history via
+  `llm_items`/`memory.ts` (`maybeCompact`, `pickSplit`). Nothing in it is "work that was
+  forgotten"; it is the design Hermes replaced. Do not rebase it onto `main` hoping to
+  recover features.
 - MSO: many `agent/*` and `agent/nightly/*` branches, owned by other agents. Untouched.
 
 ### 6. Traefik loses the host backend after a Docker network change
