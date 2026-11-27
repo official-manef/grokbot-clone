@@ -143,7 +143,17 @@ export function innerToolSlugs(name: string, args: any): string[] {
 }
 
 const READ_RE = /_(GET|LIST|SEARCH|FETCH|FIND|READ|RETRIEVE|QUERY|LOOKUP|CHECK|DESCRIBE|VIEW|COUNT)(_|$)/;
-export const isReadOnlySlug = (slug: string) => READ_RE.test(slug.toUpperCase());
+/**
+ * A read word alone is not enough. `GITHUB_CREATE_CHECK_RUN` contains `CHECK` and
+ * creates something; `SLACK_SEND_MESSAGE_SEARCH`-shaped names exist too. Anything
+ * that also names a write verb needs the user's approval, so a read-only match can
+ * only auto-allow when no write verb is present.
+ */
+const WRITE_RE = /_(CREATE|UPDATE|DELETE|REMOVE|SEND|POST|PUT|PATCH|ADD|INSERT|MOVE|COPY|UPLOAD|SET|EDIT|MODIFY|REPLY|FORWARD|INVITE|SHARE|ARCHIVE|TRASH|ENABLE|DISABLE|RUN|EXECUTE|START|STOP|CANCEL|APPROVE|MERGE|CLOSE|PUBLISH|ASSIGN|TRANSFER|PAY|REFUND|MARK)(_|$)/;
+export const isReadOnlySlug = (slug: string) => {
+  const upper = slug.toUpperCase();
+  return READ_RE.test(upper) && !WRITE_RE.test(upper);
+};
 
 // ---------- sign-in via Composio-managed Google (Gmail) connection ----------
 // Both halves are gone: `startGoogleLogin` when AuthKit replaced the fan-facing fork,

@@ -65,7 +65,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
         {side === 'right' ? <div className="bubble__plain">{b.text}</div> : <Markdown text={b.text || ' '} />}
         {b.citations && b.citations.length > 0 && (
           <div className="bubble__cites">
-            {b.citations.slice(0, 6).map((c, i) => {
+            {b.citations.filter((c) => /^https?:\/\//i.test(c.url)).slice(0, 6).map((c, i) => {
               let host = c.url;
               try { host = new URL(c.url).hostname.replace(/^www\./, ''); } catch { /* keep */ }
               return <a key={i} className="cite-chip" href={c.url} target="_blank" rel="noreferrer noopener" title={c.title ?? c.url}>{host}</a>;

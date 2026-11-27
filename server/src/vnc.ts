@@ -2,7 +2,9 @@ import type { IncomingMessage, Server } from 'node:http';
 import net from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
+import { env } from './env.js';
 import { userFromCookieHeader } from './lib/auth.js';
+import { parseOrigins } from './lib/origin-check.js';
 import { vncAuthResponse } from './lib/des.js';
 import { box } from './box.js';
 import { readyScreen, screenFor } from './computer.js';
@@ -160,11 +162,24 @@ function msgLength(b: Buffer): number {
 
 export function attachVncRelay(server: Server) {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has('binary') ? 'binary' : false) });
+  // The same origins the HTTP CSRF check allows. `SameSite=Lax` used to keep a foreign
+  // page from opening this socket with the session cookie; an embedded deployment sets
+  // `SameSite=None`, so the check has to be explicit or another site can drive a bot's
+  // desktop over a socket that carries the visitor's cookie.
+  const ownOrigins = new Set(parseOrigins([env.appUrl, env.serverUrl, ...env.embedAllowedOrigins].join(',')));
 
   server.on('upgrade', (req: IncomingMessage, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const m = url.pathname.match(/^\/api\/bots\/([^/]+)\/screen$/);
     if (!m) return; // not ours
+    // Browsers always send Origin on a WebSocket upgrade. Absence means a non-browser
+    // client, which cannot borrow a cookie from someone's session anyway.
+    const origin = req.headers.origin;
+    if (origin && !ownOrigins.has(origin)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     const user = userFromCookieHeader(req.headers.cookie);
     const bot = user ? (db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(m[1], user.id) as any) : null;
     if (!user || !bot) {

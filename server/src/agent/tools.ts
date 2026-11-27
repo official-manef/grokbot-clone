@@ -681,19 +681,17 @@ export function functionSchemas() {
 
 export type Decision = 'allow' | 'ask' | 'block';
 
+/** Composio meta tools that only discover tools. Any other meta tool can run an app action. */
+const DISCOVERY_META_TOOLS = new Set(['COMPOSIO_SEARCH_TOOLS', 'COMPOSIO_GET_TOOL_SCHEMAS']);
+
 export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
-  if (toolMap.has(toolName)) return { decision: 'allow', key: toolName, title: toolName };
-  const slugs = innerToolSlugs(toolName, args);
-  if (!slugs.length) {
-    // Composio's sandbox can run app actions from code, which would slip past the per-action
-    // approvals below. Code that reaches for them is treated like a write to an app.
-    if (/^COMPOSIO_REMOTE_(WORKBENCH|BASH_TOOL)$/.test(toolName) && /run_composio_tool|proxy_execute|execute_tool|composio/i.test(JSON.stringify(args ?? {}))) {
-      const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, toolName) as any;
-      const mode = p?.mode ?? 'needs_approval';
-      return { decision: mode === 'blocked' ? 'block' : mode === 'always_allow' ? 'allow' : 'ask', key: toolName, title: 'Run code that uses your connected apps' };
-    }
-    return { decision: 'allow', key: toolName, title: toolName };
-  }
+  if (toolMap.has(toolName) || DISCOVERY_META_TOOLS.has(toolName)) return { decision: 'allow', key: toolName, title: toolName };
+  let slugs = innerToolSlugs(toolName, args);
+  // Fail closed. `innerToolSlugs` returns nothing for a meta tool it cannot see inside
+  // (the remote workbench/bash run app actions from code) and for a MULTI_EXECUTE batch
+  // whose arguments did not parse, and "we could not tell what this would do" must not
+  // read as "nothing to approve". Gate it under its own name instead.
+  if (!slugs.length) slugs = [toolName];
   let decision: Decision = 'allow';
   let key = slugs[0];
   for (const slug of slugs) {
