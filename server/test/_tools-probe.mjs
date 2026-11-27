@@ -10,8 +10,7 @@
 const [kind, rawArgs] = process.argv.slice(2);
 const args = rawArgs ? JSON.parse(rawArgs) : {};
 
-const { availableTools, toolMap } = await import('../src/agent/tools.ts');
-const { capabilities, capabilityReport } = await import('../src/env.ts');
+const { availableTools, toolMap } = await import('../src/agent/tools.ts');const { capabilities, capabilityReport } = await import('../src/env.ts');
 
 const MARK = '@@PROBE@@';
 /** env.ts writes boot notes to stdout; a marker keeps the JSON unambiguous. */
@@ -56,6 +55,18 @@ try {
       if (!tool) throw new Error(`no such tool: ${args.name}`);
       const ctx = { userId: 'u1', botId: 'b1', enqueueBotMessage: () => {}, depth: 0 };
       out({ ok: true, value: await tool.impl(args.args ?? {}, ctx) });
+      break;
+    }
+    case 'policy': {
+      // The approval decision for a call, driven rather than restated: a throwaway user
+      // row so the `policies` lookup works, then whatever (name, args) the caller asked
+      // about. No network.
+      const { policyFor } = await import('../src/agent/tools.ts');
+      const { db } = await import('../src/db.ts');
+      db.prepare('INSERT OR IGNORE INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run('u1', 'u@example.com', 'Sam', Date.now());
+      // Optional SQL, so a case can start from a stored policy row instead of defaults.
+      if (args.seed) db.exec(args.seed);
+      out({ ok: true, decisions: (args.cases ?? []).map((c) => ({ ...c, ...policyFor('u1', c.name, c.args ?? {}) })) });
       break;
     }
     default:

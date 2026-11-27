@@ -13,6 +13,7 @@ import { CapabilityError } from './lib/capability-error.js';
 import { isEmailAllowed } from './lib/email-allowlist.js';
 import { devLoginAllowed } from './lib/dev-login-guard.js';
 import { clientKey, rateLimited, rateLimitedUntrusted, retryAfterSeconds } from './lib/rate-limit.js';
+import { mayResumeConnect } from './lib/connect-resume.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
@@ -831,12 +832,14 @@ api.get('/apps/callback', async (c) => {
     const connected = await connectedToolkits(userId).catch(() => new Set<string>());
     if (connected.has(slug)) {
       hub.emit(userId, { type: 'connections' });
-      if (botId && ownBot(userId, botId)) {
+      // Resume the Bot only for the pending connect card that started this flow, and only
+      // once. This route is unauthenticated, so any request holding a callback URL could
+      // otherwise start a paid turn on someone else's account, and a replay could repeat it.
+      const owned = Boolean(botId && ownBot(userId, botId));
+      const row = owned && botId && seq ? getRow(botId, seq) : null;
+      if (botId && mayResumeConnect({ botId, seq, row, botOwned: owned, slug })) {
         const info = await toolkitInfo(slug);
-        if (seq) {
-          const row = getRow(botId, seq);
-          if (row?.body.type === 'card' && row.body.card === 'connect') updateRow(botId, seq, { ...row.body, status: 'connected' });
-        }
+        updateRow(botId, seq, { ...(row!.body as any), status: 'connected' });
         enqueue(botId, { type: 'system', text: `The user connected ${info?.name ?? slug}. Continue with what you were doing.` });
       }
     }
