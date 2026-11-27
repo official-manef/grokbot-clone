@@ -7,7 +7,7 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `2e06960` | `0/0` in sync |
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `d1963b1` | `0/0` in sync |
 | mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
@@ -482,3 +482,19 @@ reproduce. The only stale thing is the laptop's served build (see the two-deploy
 table above), and as of `2e06960` that staleness is a **live security problem**, not
 cosmetic: both public hostnames still answer the XSS payload. Deploying is the first
 thing worth asking about. Nothing here needs a product decision right now.
+
+## 2026-11-27 (last): the mobile suites refuse a stale `web/dist`
+
+The gate at the top of `scripts/mobile-suites.mjs` only checked that
+`web/dist/index.html` **exists**. A dist built 44 commits earlier then serves old CSS,
+every phone-overlay layout assertion fails for a reason unrelated to the code under
+review, and that is precisely how those failures were once misread as a regression.
+
+It now compares `web/src/**/*.{ts,tsx,css}` mtimes to the built index and exits 1 naming
+up to five newer files. `--check-dist` isolates the gate, so both directions are testable
+without a browser or a server (verified: fresh → rc 0, `touch web/src/main.tsx` → rc 1).
+CI is unaffected: the workflow runs `npm run build` before this step.
+
+PR #14 (`/auth/google/callback` removal) was merged as `d1963b1`; it had been left
+`dirty` with zero checks because it predated PR #13, so the rebase onto `main` is what
+unblocked it, not a code change.
