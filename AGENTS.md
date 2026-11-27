@@ -12,9 +12,11 @@ own screen. Three layers, and they are separable on purpose:
 - `web/` — the UI (Vite/React). Talks only to `server/` over HTTP + WebSocket.
 - `server/` — Hono app. Owns the bot store, conversations, auth, and the tool layer.
 - `server/src/box/` — the "bot desktop" boundary: `contract.ts` defines what a box is,
-  `adapters/docker.ts` runs a local container, `adapters/mso.ts` drives a remote MSO
-  host, `adapters/orgo.ts` an Orgo computer. `desktop.ts` is a wrapper over the chosen
-  adapter; it is not a second copy of one.
+  and `adapters/docker.ts` is the one adapter that implements it. `desktop.ts` is the
+  grokbot wiring for that adapter (env, capability gate, a shell with a working
+  directory), not a second copy of it. The other two backends are siblings, not
+  adapters: `server/src/mso.ts` drives host Xvfb displays and `server/src/orgo.ts` an
+  Orgo computer. `box.ts` is the dispatch table over all three.
 
 Hermes owns the model conversation. The app sends ONE new message per turn and never
 replays history. That is why there is no compaction module (deleted in `947c7ae`) —

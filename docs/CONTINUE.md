@@ -7,7 +7,7 @@ re-deriving context. Every claim below was verified, not remembered.
 
 | Repo | Path | Remote | HEAD | vs remote |
 |---|---|---|---|---|
-| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `d1963b1` | `0/0` in sync |
+| grokbot-clone | `projects/manef/grokbot-clone` | `origin` = `official-manef/grokbot-clone` | `b24d833` | `0/0` in sync |
 | mso | `~/mso` (**not** `projects/mso`; that path does not exist) | `origin` = `rahmanef63/mso` (SSH) | `4b1c5684` | `0/1`, behind 1 |
 | nakama | `projects/lara/nakama` | `rahmanef63/nakama` | `e2f73f3c` | untouched |
 
@@ -27,8 +27,8 @@ one, and this laptop does not have that worktree at all (`ss -ltn` here shows `8
 `4000`). The other way round: the laptop serves on `:8790` behind a Cloudflare tunnel, not
 Traefik.
 
-**The laptop is no longer stale**, and the previous version of this section said it was.
-Measured 2026-11-27 15:56 against the running process (`pid 1040`, started 15:02:19):
+**The laptop's *bundle* is no longer stale**, and the previous version of this section said
+it was. Measured 2026-11-27 15:56 against the running process (`pid 1040`, started 15:02:19):
 
 ```bash
 curl -s localhost:8790/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'   # index-DG9myLKb.js
@@ -311,10 +311,12 @@ text in this section was wrong in both directions:
 
 - grokbot **on this laptop**: `main` only. There is no `prod` branch here; the deploy
   branch of that name lives on the VPS (`ssh antinrml 'git -C
-  projects/grokbot-clone branch -a'`). What also sits here is ten `t3/*` branches against
-  ten worktrees under `~/.t3/worktrees/grokbot-clone/` (re-measured 2026-11-27 after the
-  PR #12 session); they are not part of the product, and removing them means removing
-  those worktrees first.
+  projects/grokbot-clone branch -a'`). What also sits here is thirteen `t3/*` branches
+  against thirteen worktrees under `~/.t3/worktrees/grokbot-clone/` (re-measured
+  2026-11-28); they are not part of the product, and removing them means removing
+  those worktrees first. The count keeps growing because every auto-recovery thread
+  gets its own worktree and nothing prunes them — `git worktree list` and
+  `git branch --list 't3/*'` agree on 13.
 - grokbot remote `origin` (`official-manef`): `main`, `feat/mso-runtime`, `ci/mobile-suites`,
   `qa/mobile-overlays`, `test/rename-route` — the last three are merged and could be
   deleted, but deleting a merged branch is cosmetic and nobody asked.
@@ -478,11 +480,80 @@ auth wall. Confirmed red on the old code (`302 !== 401`) and green after. Full g
 `2e06960` + this change: `typecheck` 0, `npm test` 197/197, `build` 0,
 `node scripts/mobile-suites.mjs` green.
 
-Remaining known holes are the ones already recorded above, none of them new: the
-laptop's served build is stale, the VPS prod worktree trails `main`, and the audit's
-LOW/MEDIUM items (docs that described files deleted in `011649d`) are still open.
+Remaining known holes are the ones already recorded above, none of them new: the VPS
+`prod` worktree trails `main`, and both hosts mount `/auth/google/callback` until they
+are rebuilt (harmless while `COMPOSIO_API_KEY` is unset — see the check below).
 
-## First commands for the next session
+The audit's LOW/MEDIUM "docs describe files deleted in `011649d`" item is **closed**
+(2026-11-28), but the item as written was mis-scoped, and one doc claim I nearly
+"corrected" into being wrong was in fact right:
+
+- `011649d` deleted nothing — its name-status is 1 add + 16 modifies — so no doc could
+  have described a file that commit removed. The premise was false.
+- The one real defect was `AGENTS.md:15`: it said `server/src/box/adapters/` held three
+  adapters (`docker.ts`, `mso.ts`, `orgo.ts`) and that `desktop.ts` "is a wrapper over
+  the chosen adapter". Only `docker.ts` is there; `mso.ts` and `orgo.ts` are at
+  `server/src/` and are siblings in `box.ts`'s dispatch table, not adapters, and
+  `desktop.ts` is the grokbot wiring over `adapters/docker.ts`. Corrected.
+- The laptop-is-stale claim 400 lines up is **correct and was left alone**: `server/dist`
+  was built 14:24:49, `d1963b1` merged 15:18, and the built tree still proves it —
+  `server/dist/routes.js:272` mounts `/auth/google/callback` while `server/src/routes.ts:284`
+  says it is gone, and `curl https://grok.rahmanef.com/api/auth/google/callback` → `302`
+  against the `401` a current build would give. Do not "fix" that sentence.
+
+A path sweep of README, AGENTS, GEMINI and `docs/*.md` still lists paths, but every
+remaining hit is legitimate: another repo's files (`config.yaml`, `hermes_cli/auth.py`,
+`~/.cloudflared/config.yml`, `/home/antinrml/bin/…`, MSO's `lib/auth/session-cookie.ts`),
+dated backups, a deliberately-quoted old bundle name (`index-j_S061_x.js`), or a sibling
+repo's script (`scripts/seed-mso-password.mts` runs in `~/mso`).
+
+Re-run the sweep from the repo root:
+
+```bash
+node -e '
+const fs=require("fs"),cp=require("child_process");
+const files=cp.execSync("git ls-files").toString().trim().split("\n");
+const names=new Set(files.map(f=>f.split("/").pop()));
+const docs=["README.md","AGENTS.md","GEMINI.md",...fs.readdirSync("docs").filter(f=>f.endsWith(".md")).map(f=>"docs/"+f)];
+const re=/`([^`\s]+\.(?:ts|tsx|mjs|js|mts|py|css|json|sh|sql|yml|yaml))`/g;
+for(const d of docs) fs.readFileSync(d,"utf8").split("\n").forEach((line,i)=>{
+  let m; while((m=re.exec(line))){
+    const p=m[1];
+    if(p.includes("*")||fs.existsSync(p)||files.includes(p)||names.has(p.split("/").pop())) continue;
+    console.log(d+":"+(i+1), p);
+  }
+});'
+```
+
+It is not wired into CI on purpose: the remaining hits above are correct as written, so
+a gate would need a per-line allowlist that nobody would maintain.
+
+## 2026-11-28: the last documented open item was mis-stated, now closed
+
+Thread `mcp:6e42db7d…` died on a provider error mid-grep, not on a red suite. Its
+successor never got past reading docs, because this worktree had no `node_modules`
+(`npm ci` fixes that; `npm test` then reports 197/197 in ~27s).
+
+What it was chasing is now closed honestly:
+
+| claim | reality |
+|---|---|
+| "docs describe files deleted in `011649d`" | `011649d` deleted **nothing** — 1 add, 16 modifies. The premise was false. |
+| `AGENTS.md` names `adapters/mso.ts` and `adapters/orgo.ts` | only `adapters/docker.ts` exists; the other two backends are `server/src/mso.ts` / `orgo.ts`, siblings in `box.ts`'s dispatch table |
+| "the laptop's build is stale" | **true, and left alone** — `server/dist` 14:24:49 predates `d1963b1` (15:18), `server/dist/routes.js:272` still mounts the removed route, live `302` vs the `401` a current build gives |
+
+`server/test/box-layout-docs.test.mjs` (3 cases) now reads the adapters directory,
+`box.ts`'s imports and the adapter's exported `createDockerBoxRuntime`, so the doc and
+the tree cannot drift apart silently. Verified red on the old `AGENTS.md` and green
+after; full gates at `b24d833`: typecheck 0, `npm test` 200/200, `build` 0.
+
+One near-miss worth recording: while writing this I "verified" the laptop was current
+from `docs/CONTINUE.md`'s own earlier paragraph, and nearly corrected the accurate
+statement 400 lines below it. Two independent checks caught it — the `dist` mtime and a
+live `curl` — and neither was the document. A doc asserting a fact about itself is not
+evidence for that fact.
+
+
 
 ```bash
 # this laptop
@@ -497,8 +568,12 @@ ssh antinrml 'systemctl --user status grokbot.service --no-pager | head -5'
 
 Then work item 6's permanent fix if root access is available, or pick the next real
 feature. Items 1–5 are closed; item 2 is closed with a real-container script to
-reproduce. As of 2026-11-27 15:56 the laptop's build is current and no longer the stale one;
-what is stale is the VPS `prod` worktree. That is not cosmetic:
+reproduce.
+
+Build state, stated precisely, because "current" alone has already misled twice: the
+laptop's `web/dist` bundle is current for the XSS and phone-overlay fixes, and its
+`server/dist` is **not** current for `d1963b1`. The VPS `prod` worktree is behind by 15
+commits and predates the XSS fix entirely, which is not cosmetic:
 
 ```
 $ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
