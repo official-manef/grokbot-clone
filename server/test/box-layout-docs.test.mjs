@@ -99,7 +99,13 @@ test('the handoff does not hardcode counts that only get larger', () => {
     if (/went from|became|used to|was wrong|had gone/i.test(t)) continue;
     // A count of branches/worktrees, optionally spelled out.
     const m = new RegExp(`\\b(${counted})\\s+(?:\\w+\\s+){0,2}(?:t3/\\* branches|branches|worktrees)\\b`, 'i');
-    if (m.test(t)) offenders.push(`${i + 1}: ${t}`);
+    // A commit distance between two branches. Same defect: "39 behind" became 40 while it
+    // was being read, and the safe form is the `rev-list --count` that produced it.
+    // Past tense is evidence of a measurement, not a claim about now — lines that say
+    // "was 12 commits behind at `df1e3bb`" or `said "15 behind"` are history and stay.
+    const narrative = /\b(was|were|said|had reached|went from|became|used to)\b/i;
+    const distance = new RegExp(`\\b(${counted})\\s+(?:commits?\\s+)?(?:ahead|behind)\\b`, 'i');
+    if (m.test(t) || (distance.test(t) && !narrative.test(t))) offenders.push(`${i + 1}: ${t}`);
   }
 
   assert.deepEqual(

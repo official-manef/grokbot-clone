@@ -999,6 +999,45 @@ answers `slug:""` with the origin pinned. Details, including the DB backup and t
 
 `grok.rahmanef.com` was already fixed (slug `""`, origin pinned).
 
+## 2026-11-28 (last): the three "auditor" threads died on the provider, not on the repo
+
+Three threads were reported failed with the message `[auto-recovery] … status terakhir:
+failed`, and two more with `Internal error: Failed to execute statement`. Every one of the
+five ends with the same turn item, read out of the threads themselves rather than guessed:
+
+```
+type=error   title="Provider error"   message="Internal error: Failed to execute statement"
+```
+
+That is ACP `-32603` from the model provider. It is not this repo, and there is no diff to
+write for it. What each thread had *actually* reached before it died is now merged:
+
+| thread | what it was doing | where that work is |
+|---|---|---|
+| `mcp:66212983` | unknown `/api/*` fell through to the SPA shell as `200 text/html` | `cdf04e3` (#34) + `28f02d2` (#36), plus `api-404.test.mjs` |
+| `mcp:cfbfedaa` | the CSRF gate refused `gb login` and `e2e.mjs` — JSON with no `Origin` | `aec018d` (#38) + `ef28ada` (#41), plus `csrf-wiring.test.mjs` / `csrf-scope-boundary.test.mjs` |
+| `mcp:89285c03` | `mobile-suites.mjs` checked only that `web/dist` **exists**, not that it is fresh | `c6d7752` (#30), `scripts/dist-freshness.mjs`, `dist-freshness.test.mjs` |
+
+All three threads had a second, non-provider cause for their reds: they ran in worktrees with
+no `node_modules`, so a gate reported a missing module instead of a result. `npm ci` is what
+turns those into measurements. It is not a repo fix either — but it is why the same tree that
+"failed" there passes here.
+
+Gates measured on this box, not inherited: `typecheck` 0, `npm test` **252 pass / 0 fail**
+(the one case that skips does so only when there is no local Composio catalog, and this box
+has one), `build` 0, `node scripts/mobile-suites.mjs` 25/25 + 58/58 + 10/10.
+
+Nothing about the three threads needed a code change in this session. What did need one was
+the guard on this file:
+
+`box-layout-docs.test.mjs` refused a hardcoded branch or worktree count, but not a commit
+distance — so a sentence recording how far `prod` sat behind survived the guard while being
+wrong by the time it was read, and then went away with the deploy. The guard now also refuses
+a stated `ahead`/`behind` count as current state and keeps past-tense measurements ("`prod`
+was 12 commits behind at `df1e3bb`", "this section said 15 behind") because those are
+evidence, not claims about now. Red proven: restoring that sentence fails the guard and names
+the line.
+
 ## 2026-11-27 (last): the mobile suites refuse a stale `web/dist`
 
 The gate at the top of `scripts/mobile-suites.mjs` only checked that
