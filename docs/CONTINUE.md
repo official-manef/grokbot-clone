@@ -54,10 +54,12 @@ POST /api/bots         text/plain, evil Origin → 403 cross-site request refuse
 POST /api/bots         text/plain, own Origin → 401 unauthenticated      (reached the route)
 ```
 
-The third line is the one that matters: `{"error":"forbidden"}` is the owner-key check
-answering, which means the request got past the gate. The last two lines show the two
-branches are still separate: the gate refuses a form with no/foreign Origin, and lets a
-same-origin form through to the session wall.
+The lines that matter are the second and the last. `{"error":"forbidden"}` on line 2 is
+the owner-key check answering, so that request got past the gate — the fallback sign-in
+works again. `401 unauthenticated` on the last line is the session wall answering, so a
+same-origin form still gets through the gate and is refused only by auth. The two form
+lines with no or a foreign `Origin` stay `403 cross-site request refused`: the branches
+are still separate.
 
 Gates: `typecheck` 0, `npm test` 245/245 (239 before, +3 in `csrf-wiring.test.mjs`, +5
 net in `origin-check.test.mjs`), `build` 0, mobile-suites 25/25 + 58/58 + 10/10. Run at
