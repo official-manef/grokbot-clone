@@ -45,8 +45,8 @@ who holds their own live attempt plus a victim's Composio account id to be signe
 as that victim. A route whose only inputs are caller-supplied and whose only output is
 a session is a liability even while its precondition is missing, so the handler,
 `googleProfile` and the `deleteConnection` it needed are removed. `staff-only.test.mjs`
-asserts the route is not mounted (it falls through to the 401 wall, where a mounted
-callback would have answered `302 ?login=failed`).
+asserts the route is not mounted (it falls through to the `/api/*` 404 catch-all,
+where a mounted callback would have answered `302 ?login=failed`).
 
 The limiter has two pools that never share a map: `ip:` keys for pre-auth traffic and
 `user:`/`bot:` keys for authenticated traffic. They are separate because an
