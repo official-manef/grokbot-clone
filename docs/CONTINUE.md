@@ -186,7 +186,7 @@ to; being behind it is expected and not drift.
 
 | where | unit | worktree | port | hostname | build |
 |---|---|---|---|---|---|
-| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | `web/dist` built 2026-11-27 14:24, `server/dist` 14:24:49; service restarted 15:02. **Current for `c09562c`**, i.e. it carries the phone-overlay and XSS fixes. `d1963b1` merged 15:18, so the `/auth/google/callback` removal is the one change not in it |
+| this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | `web/dist` and `server/dist` are rebuilt from `main` by `npm run build`; the **service is not restarted automatically**, so the running process can be older than the build. Check both instead of trusting this cell: `ls -l --time-style=+%F\ %T server/dist/index.js` vs `systemctl --user show grokbot-clone.service -p ActiveEnterTimestamp`. On 2026-11-29 the dist was 05:23 and the process had been up since 00:17, so the live laptop answered `200 text/html` for an unknown `/api/*` path that the built code answers `404 application/json` |
 | VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `cc6a22b`, `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com` |
 
 Older text in this file said "`.worktrees/prod` … `grokbot.service` … port 4000 behind
@@ -224,7 +224,13 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:8790/api/auth/google/callback
 ```
 
 That restart was **not** done in this session: it is a production deploy on a hostname
-other people may be using, so it needs an explicit go-ahead.
+other people may be using, so it needs an explicit go-ahead. As of 2026-11-29 the laptop
+is also stale again, in the same narrow way: `npm run build` at 05:23 produced a
+`server/dist` that answers `404 application/json` for an unknown `/api/*` path, while the
+process started at 00:17 still answers `200 text/html` to
+`curl localhost:8790/api/auth/nothing-here`. Verified by running the built artifact on a
+spare port, not by inference. Both hosts need the same restart; neither is
+self-updating.
 
 ### The XSS fix is on `main`, only the VPS lacks it
 
