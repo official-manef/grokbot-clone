@@ -363,20 +363,31 @@ Working trees are clean. `npm test` in grokbot: **197 pass, 0 fail** on `2e06960
 `MSO: tsc clean, lib/desktop suite 32/32` line below is from 2026-11-20 and was **not**
 re-run on 2026-11-27 — treat it as inherited, not measured.
 
-**`npm test` now bounds its own parallelism** (`--test-concurrency=4`). `node --test`
-defaults to CPU count, and each of the 24 files forks `node --import tsx` children that
-each pay a TS compile. On this 16-core box under load ~150 that self-starved: 17 of 192
-cases failed at ~96s, every one a probe timeout, zero assertion failures. The same
-commit at concurrency 4: 192 pass in 20s. If a probe test ever reports a timeout, read
-the message — it now says whether the child was *killed* (the box was too loaded) or
-crashed (a real failure).
+**`npm test` bounds its own parallelism at `--test-concurrency=2`** (it was 4). `node
+--test` defaults to CPU count, and each of the 24 files forks `node --import tsx` children
+that each pay a TS compile. On this 16-core box under load ~150 the default self-starved:
+17 of 192 cases failed at ~96s, every one a probe timeout, zero assertion failures. The
+first mitigation was 4, which was not enough — see below.
 
-**That bound is a mitigation, not a fix.** Measured again on `c7b8deb` when this box sat
-at load 144–218 on 16 cores, still at `--test-concurrency=4`: 194/197, then 195/197, and
-every failure was a ~60 s probe timeout in a *different* file each run (`prompt`,
-`web_search`, `apps-callback`, `llm-capability`) with zero assertion failures. Each of
-those files passes 13/13 when run alone. Before blaming a change, check `/proc/loadavg`
-and re-run the named file by itself.
+**Four was still a mitigation; two is the working number.** Measured 2026-11-28 with a
+deliberate 14-process spin load on 16 cores:
+
+| concurrency | load at start | result | wall |
+|---|---|---|---|
+| 2 | 181 | **252/252 pass** | 94s |
+| 4 | 45 | **245/252, 7 fail** | 352s |
+
+Four failed at *lower* load, and every failure was again a probe timeout in a different
+file (`workos-auth`, `x-search`, `web-search`, `staff-only`) with zero assertion failures.
+So the cap was never about wall time — four probe children plus the agent processes
+sharing the box outrun the 60s per-probe timeout, and a timeout reads as an assertion
+failure. If a probe test ever reports a timeout, read the message: it says whether the
+child was *killed* (the box was too loaded) or crashed (a real failure). Before blaming a
+change, check `/proc/loadavg` and re-run the named file by itself — each of those files
+passes alone.
+
+This matters beyond CI: three auditor threads died on failures of exactly this shape, and
+the T3 watchdog could not see them because a stalled run has no `completed_at`.
 
 **The "host has 0 docker images" claim in the previous version of this file was wrong.**
 The daemon works, 26 images were present, and `docker build -t grokbot-desktop:latest
