@@ -61,6 +61,36 @@ same-origin form still gets through the gate and is refused only by auth. The tw
 lines with no or a foreign `Origin` stay `403 cross-site request refused`: the branches
 are still separate.
 
+**One boundary this scope leaves open, reproduced 2026-11-29 and deliberately not
+changed.** `isFormContentType` returns `false` for any type it does not recognise, and
+`false` means exempt. So `application/jsonx` — a typo, or a vendor type — skips the gate
+entirely:
+
+```
+$ grep -n FORM_CONTENT_TYPES server/src/lib/origin-check.ts   # 3 entries, exact match
+$ curl -X POST .../api/bots -H 'Content-Type: application/jsonx' -H 'Origin: https://evil.example' \
+    -b 'grokbot_session=…' -d '{"name":"csrf-pwned"}'
+{"bot":{"id":"bot_K4NrqBf2aqxX","name":"csrf-pwned",…}}      status=201
+```
+
+Hono's `c.req.json()` parses the body whatever the Content-Type says, so the write goes
+through. The same request with `application/x-www-form-urlencoded` is `403`, as intended.
+
+This is **not** a CSRF hole, and that is why nothing was changed: it needs a client that
+already holds the victim's session cookie *and* can set an arbitrary Content-Type. A
+browser cannot be made to do that from another page — measured, not assumed, with a real
+Chromium page on `localhost:9999` aimed at `127.0.0.1:8916`: `no-cors` fetch with
+`content-type: application/json` and with `application/jsonx` both failed at the network
+layer, and a JSON `sendBeacon` was accepted by the page but created no bot. A preflight
+for either type gets `401` with no `Access-Control-Allow-*`, so the browser never sends it.
+
+The residual risk is only that the allowlist's `false` is doing two jobs — "needs a
+preflight" and "not a form" — so a future caller that trusts `isFormContentType` for a
+different question would inherit the wrong answer. Anyone tightening this should switch to
+an explicit allowlist of *preflightable* types rather than making unknown types a form,
+because that would put `application/jsonx` in front of the CSRF gate for every non-browser
+tool the section above just rescued.
+
 Gates: `typecheck` 0, `npm test` 245/245 (239 before, +3 in `csrf-wiring.test.mjs`, +5
 net in `origin-check.test.mjs`), `build` 0, mobile-suites 25/25 + 58/58 + 10/10. Run at
 load 180 on 16 cores, so the probe timeouts the file warns about did not appear.
