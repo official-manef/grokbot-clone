@@ -3,6 +3,66 @@
 Written at the end of a long session so the next one starts informed rather than
 re-deriving context. Every claim below was verified, not remembered.
 
+## 2026-11-29: the CSRF gate refused every non-browser client the repo ships
+
+The gate added on 2026-11-16 required `Origin` on **every** unsafe request. A browser
+always sends it; nothing else does. So for ten days the app refused its own tooling:
+
+```
+$ curl -X POST localhost:PORT/api/auth/dev -H 'content-type: application/json' -d ...
+{"error":"cross-site request refused"}   status=403
+$ node tests/e2e.mjs http://localhost:PORT
+Error: dev login failed: 403
+```
+
+`bin/gb login`, `node tests/e2e.mjs` and `bash scripts/sign-in-link.sh` — the documented
+fallback sign-in — all sent JSON with no `Origin` and all answered `403`. None was a
+CSRF victim; none carries a victim's cookie and none can be conjured from another page.
+
+The gate is now scoped to the content types a **form** can send
+(`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`), plus a
+missing `Content-Type`, which is treated as a form so the unclassifiable case cannot
+become the bypass. Anything else needs a CORS preflight this server never grants. A
+request carrying `Authorization` is exempt outright: bearer auth, no cookie to ride.
+
+That exemption was **measured in a real browser**, not assumed. A page on `localhost:9999`
+aimed cross-site writes at `127.0.0.1:9998`:
+
+| what the page sent | what arrived |
+|---|---|
+| `fetch(no-cors, headers:{'content-type':'application/json'}, body: JSON)` | `text/plain;charset=UTF-8` |
+| `sendBeacon(url, Blob(json, {type:'application/json'}))` | `text/plain;charset=UTF-8` |
+| `sendBeacon(url, 'a=4')` | `text/plain;charset=UTF-8` |
+| `<form method=POST>` submit | `application/x-www-form-urlencoded` |
+| `sendBeacon(url, Blob(binary))` | no content-type at all |
+| `fetch(no-cors, POST, no body)` | no content-type, `Origin` present |
+
+Every one either arrives as a form type (checked) or carries `Origin` anyway. The
+browser downgrades a cross-site `application/json` to `text/plain`, so a page cannot
+reach the exempt branch even by asking for it.
+
+Red proven in both directions. With the old `origin-check.ts` restored, the new
+`server/test/csrf-wiring.test.mjs` fails 2/3 (`gb login` and `sign-in-link.sh` refused as
+cross-site) while the cross-site-form case still passes — the old test asserted the
+decision, and the decision was the bug. Against a real build, after the fix:
+
+```
+POST /api/auth/dev     JSON, no Origin     → 200 {"ok":true}
+POST /api/auth/owner   JSON + dummy bearer → 403 {"error":"forbidden"}   (reached the route)
+POST /api/bots         urlencoded, no Origin → 403 cross-site request refused
+POST /api/bots         text/plain, evil Origin → 403 cross-site request refused
+POST /api/bots         text/plain, own Origin → 401 unauthenticated      (reached the route)
+```
+
+The third line is the one that matters: `{"error":"forbidden"}` is the owner-key check
+answering, which means the request got past the gate. The last two lines show the two
+branches are still separate: the gate refuses a form with no/foreign Origin, and lets a
+same-origin form through to the session wall.
+
+Gates: `typecheck` 0, `npm test` 245/245 (239 before, +3 in `csrf-wiring.test.mjs`, +5
+net in `origin-check.test.mjs`), `build` 0, mobile-suites 25/25 + 58/58 + 10/10. Run at
+load 180 on 16 cores, so the probe timeouts the file warns about did not appear.
+
 ## 2026-11-29: an unknown `/api/*` path answered the app shell with `200`
 
 Found while re-checking the removed `/auth/google/callback` route. `index.ts` registered

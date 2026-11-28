@@ -43,6 +43,8 @@ export function createApp(options: { webDist?: string } = {}) {
       method: c.req.method,
       path: c.req.path,
       origin: c.req.header('origin'),
+      contentType: c.req.header('content-type'),
+      authorization: c.req.header('authorization'),
       ownOrigins,
       allowedOrigins: env.embedAllowedOrigins,
     });
