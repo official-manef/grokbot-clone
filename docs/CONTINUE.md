@@ -3,6 +3,47 @@
 Written at the end of a long session so the next one starts informed rather than
 re-deriving context. Every claim below was verified, not remembered.
 
+## 2026-11-28: the laptop was down for 90 minutes, because a deploy is four commands
+
+`grok.rahmanef.com` answered `502` from 13:46 to 15:16 today. Not a code defect and not
+the stale-build problem recorded below — the service was **stopped and never started**:
+
+```
+$ systemctl --user status grokbot-clone.service
+     Active: inactive (dead) since Sat 2026-11-28 13:46:46 WIB; 1h 29min ago
+    Process: 460 ExecStart=… dist/index.js (code=killed, signal=TERM)
+$ curl -s -o /dev/null -w '%{http_code}' https://grok.rahmanef.com/api/health
+502
+```
+
+Its `web/dist` and `server/dist` were also from 11:46, older than `main`, so the process
+that had been serving since 00:17 was three commits behind. Both are the same failure:
+the deploy is a hand-run sequence (`backup → merge → build → restart → verify`) with no
+script, and every session runs a different subset. This file already records the other
+two subsets happening — a build with no restart (live `200 text/html` for a path the
+build answers `404`), and a restart with no build.
+
+`scripts/deploy-laptop.sh` runs the sequence as one command and **verifies from the
+served socket**, not from the dist, so a half-deploy fails instead of reporting success.
+It refuses to restart if the build produced no artifact, and it backs up the DB with
+`better-sqlite3`'s `.backup()` first, because a restart runs migrations.
+
+Both directions were driven, in that order:
+
+| the script | verdict |
+|---|---|
+| `--dry-run` | prints the plan, changes nothing |
+| verify block pointed at a port with nothing listening | 2/2 **FAIL**, `000` vs expected — it does not pass on absence |
+| verify block against the live service | 4/4 ok: `/` 200, `/api/health` 200, `/api/auth/google/callback` 404, `/api/auth/nothing-here` 404 |
+
+The laptop was put back on current `main` (`ef28ada` → `c1aa76c`) while closing the
+outage: DB backed up first (21 tables, 5 bots, `~/backups/grokbot/laptop-pre-restart-*`),
+then `git merge --ff-only`, `npm run build`, `systemctl --user start`. Measured after, on
+both the socket and the public hostname: `/api/auth/nothing-here` → `404 application/json`
+(was `200 text/html`), `/api/auth/google/callback` → `404` (was `302`), and
+`/api/apps/callback` with the `<img onerror>` slug carries `slug:""` and a pinned origin
+instead of the payload.
+
 ## 2026-11-29: the CSRF gate refused every non-browser client the repo ships
 
 The gate added on 2026-11-16 required `Origin` on **every** unsafe request. A browser
