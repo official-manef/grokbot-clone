@@ -277,8 +277,9 @@ grok.antinrml.com   status=200, body contains <img src=x onerror=alert(1)>, targ
 ```
 
 So **the hole is open on one public hostname right now**: `grok.antinrml.com` serves
-`cc6a22b` (15 behind `manef/main`; `grep -c jsonForScript server/dist/routes.js` there →
-`0`). The laptop's earlier entry in this section said it served `b5ffa0d`; that was true
+`cc6a22b` (`grep -c jsonForScript server/dist/routes.js` there → `0`; get the distance
+from `git rev-list --count HEAD..manef/main` in `.worktrees/prod`, not from a number
+written here). The laptop's earlier entry in this section said it served `b5ffa0d`; that was true
 before its 15:02 restart and is no longer. A logged-in user's browser hitting the VPS URL
 runs attacker script on that origin with their cookie in scope, and the response carries
 `content-type: text/html`, no CSP and no `nosniff`.
@@ -909,6 +910,37 @@ git merge --ff-only manef/main && npm run build && systemctl --user restart grok
 ```
 
 Nothing else here needs a product decision right now.
+
+## 2026-11-28 (last): four "failed" threads had already landed
+
+Four T3 threads were reported failed: `port history-compaction`, its retry,
+`extract box runtime`, `port session-title (retry)`. All four were **not defects** —
+the work is on `manef/main` and was already pushed before those threads died:
+
+| thread | commit on `manef/main` |
+|---|---|
+| port history-compaction (+ retry) | `c2122b5` ported it, then `947c7ae` deleted `server/src/agent/compaction/` on purpose (Hermes owns history — see AGENTS.md) |
+| extract box runtime | `32cd1f8` + `2818dd7` (`box/contract.ts`, `adapters/docker.ts`, `desktop.ts` as wrapper) |
+| port session-title (retry) | `c2122b5` (`agent/session-title.ts`) + `a297851` (test scrubs the XAI alias) |
+
+The cause is the same one already recorded above: those threads had no `node_modules`, so
+every gate they ran reported a missing-module failure rather than a result. `server/test/
+{box-contract,session-title,titles,call-transcript}.test.mjs` → 31/31.
+
+PR #41 (`docs/csrf-scope-boundary`) was the only open PR; CI green on its head, merged
+squash as `ef28ada`. Gates on that tree: typecheck 0, `npm test` **251 pass / 1 skip / 0
+fail**, build 0. No open PRs remain.
+
+**Still needs a go-ahead, unchanged by this session:** `grok.antinrml.com` serves
+`cc6a22b` and the `/api/apps/callback` XSS is live there, measured again today
+
+```
+$ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
+... slug:"</script><img src=x onerror=alert(1)>",ok:true},'*')   <- verbatim, unescaped
+```
+
+`grok.rahmanef.com` is fixed (slug `""`, origin pinned). `.worktrees/prod` has 0 commits
+of its own and 39 behind, so the deploy below is a pure fast-forward.
 
 ## 2026-11-27 (last): the mobile suites refuse a stale `web/dist`
 
