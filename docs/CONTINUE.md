@@ -219,7 +219,7 @@ to; being behind it is expected and not drift.
 | where | unit | worktree | port | hostname | build |
 |---|---|---|---|---|---|
 | this laptop (WSL) | `grokbot-clone.service` | `projects/manef/grokbot-clone` itself, on `main` | `8790` | `grok.rahmanef.com` via `~/.cloudflared/config.yml` | `web/dist` and `server/dist` are rebuilt from `main` by `npm run build`; the **service is not restarted automatically**, so the running process can be older than the build. Check both instead of trusting this cell: `ls -l --time-style=+%F\ %T server/dist/index.js` vs `systemctl --user show grokbot-clone.service -p ActiveEnterTimestamp`. On 2026-11-29 the dist was 05:23 and the process had been up since 00:17, so the live laptop answered `200 text/html` for an unknown `/api/*` path that the built code answers `404 application/json` |
-| VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `cc6a22b`, `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com` |
+| VPS `antinrml` | `grokbot.service` | `/home/antinrml/projects/grokbot-clone/.worktrees/prod` | `4000` | `grok.antinrml.com` | `ea59800` since 2026-11-28 13:31 (fast-forward from `cc6a22b`, DB backed up first), `DESKTOP_MODE=mso`, `SESSION_COOKIE_SAMESITE=none`, `EMBED_ALLOWED_ORIGINS=https://mso.antinrml.com`. The SHA here goes stale: ask `git log --oneline -1` in that worktree |
 
 Older text in this file said "`.worktrees/prod` … `grokbot.service` … port 4000 behind
 Traefik at `grok.antinrml.com`" as if that were the only deployment; it is only the VPS
@@ -276,7 +276,7 @@ grok.rahmanef.com   status=200, slug dropped: `slug:""`, target `"https://grok.r
 grok.antinrml.com   status=200, body contains <img src=x onerror=alert(1)>, target `'*'`
 ```
 
-So **the hole is open on one public hostname right now**: `grok.antinrml.com` serves
+So **the hole was open on one public hostname**, `grok.antinrml.com`, which served
 `cc6a22b` (`grep -c jsonForScript server/dist/routes.js` there → `0`; get the distance
 from `git rev-list --count HEAD..manef/main` in `.worktrees/prod`, not from a number
 written here). The laptop's earlier entry in this section said it served `b5ffa0d`; that was true
@@ -284,17 +284,34 @@ before its 15:02 restart and is no longer. A logged-in user's browser hitting th
 runs attacker script on that origin with their cookie in scope, and the response carries
 `content-type: text/html`, no CSP and no `nosniff`.
 
-Closing it in production is one deploy, no config change:
+**Deployed 2026-11-28 13:31 and verified closed.** Go-ahead was given explicitly, so the
+VPS went from `cc6a22b` to `ea59800` by pure fast-forward (0 commits of its own). Order was
+backup → merge → build → restart, because a restart that loses the DB is not a deploy:
 
-```bash
-# VPS only, now that the laptop is current
-ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod && git merge --ff-only manef/main && npm run build && systemctl --user restart grokbot.service'
+1. `better-sqlite3` `.backup()` of `data/grokbot.db` → `~/backups/grokbot/`, read back and
+   verified (22 tables, 2 bots). `.env` copied to `/tmp/opencode/prod.env.backup`.
+2. `git merge --ff-only manef/main`, `npm run build` (both `server/dist/routes.js` and
+   `web/dist/index.html` rebuilt at 13:31), `systemctl --user restart grokbot.service`.
+3. First restart lost a race: `EADDRINUSE :::4000` because the old process still held the
+   port, systemd's `Restart=` brought it back up on the next attempt. `NRestarts=1`,
+   `ActiveState=active`, `:4000` answers 200. Not a defect in the new build — but do not
+   read "activating" right after a restart as a failure either.
+
+Measured after, not assumed:
+
+```
+$ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
+... slug:"","ok":true},"https://grok.antinrml.com")   <- escaped, origin pinned (was '*/verbatim)
+$ curl -so /dev/null -w '%{http_code}' -XPOST https://grok.antinrml.com/api/bots -Horigin:https://evil.example
+401
+$ curl -so /dev/null -w '%{http_code}' https://grok.antinrml.com/api/auth/google/callback
+404        <- the removed route, as a 404, not a 302
 ```
 
-Neither host was deployed in this session: they are production restarts on hostnames other
-people use, and the 2026-11-27 sessions deliberately left that to an explicit go-ahead.
-Treat this paragraph
-as the standing request for one.
+DB after the migration: 22 tables, 3 bots (the two backed up plus `annu`, created before the
+deploy). `grok.rahmanef.com` was already fixed and stays as it was.
+
+Neither the laptop nor MSO was touched by this deploy.
 
 Live MSO `:4005` on this laptop (`pid 484`) was started 2026-11-27 12:51 from `~/mso`.
 
@@ -872,10 +889,11 @@ Then work item 6's permanent fix if root access is available, or pick the next r
 feature. Items 1–5 are closed; item 2 is closed with a real-container script to
 reproduce.
 
-Build state, stated precisely, because "current" alone has already misled twice: the
-laptop's `web/dist` bundle is current for the XSS and phone-overlay fixes, and its
-`server/dist` is **not** current for `d1963b1`. The VPS `prod` worktree predates the XSS
-fix entirely, which is not cosmetic:
+Build state **as of 2026-11-27**, kept as history — the VPS half was fixed on
+2026-11-28 (see the XSS section above; `grok.antinrml.com` now serves `ea59800`). At the
+time, "current" alone had already misled twice: the laptop's `web/dist` bundle was current
+for the XSS and phone-overlay fixes, and its `server/dist` was **not** current for
+`d1963b1`. The VPS `prod` worktree predated the XSS fix entirely, which was not cosmetic:
 
 ```
 $ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
@@ -884,16 +902,18 @@ $ curl -s 'https://grok.rahmanef.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cim
 ... slug:"" ... ,"https://grok.rahmanef.com")}                  <- slug dropped, origin pinned
 ```
 
-So `grok.antinrml.com` still runs `cc6a22b` and is exploitable now: `content-type: text/html`,
+So `grok.antinrml.com` then ran `cc6a22b` and was exploitable: `content-type: text/html`,
 no CSP, no `nosniff`, and script running on that origin can call `/api/*` with the
-visitor's cookie (httpOnly stops reading it, not using it). It also predates everything
-`25b445a` (#23) closed, and two of those matter more on this host than on the laptop:
+visitor's cookie (httpOnly stops reading it, not using it). It also predated everything
+`25b445a` (#23) closed, and two of those mattered more on this host than on the laptop:
 the VNC `upgrade` had no `Origin` check at all, and the embedded deployment sets
 `SameSite=None`, so any site could open that socket with a visitor's cookie and drive a
-bot's desktop. Deploying is the highest-value thing left, and it needs an explicit
-go-ahead because it restarts a hostname other people use. Check the two numbers that
-decide whether it is a pure fast-forward rather than trusting a count here — this
-section said "15 behind" while the real figure had reached 22:
+bot's desktop. **All of it is closed as of 2026-11-28** — the deploy went out, see the XSS
+section above for the backup, the fast-forward and the post-deploy measurements.
+
+The two numbers below still decide whether a future deploy is a pure fast-forward. Trust
+them, not a count written here — this section once said "15 behind" while the real figure
+had reached 22:
 
 ```bash
 ssh antinrml 'cd projects/grokbot-clone/.worktrees/prod &&
@@ -931,16 +951,12 @@ PR #41 (`docs/csrf-scope-boundary`) was the only open PR; CI green on its head, 
 squash as `ef28ada`. Gates on that tree: typecheck 0, `npm test` **251 pass / 1 skip / 0
 fail**, build 0. No open PRs remain.
 
-**Still needs a go-ahead, unchanged by this session:** `grok.antinrml.com` serves
-`cc6a22b` and the `/api/apps/callback` XSS is live there, measured again today
+**That deploy then happened**, same session, on an explicit go-ahead: `grok.antinrml.com`
+went `cc6a22b` → `ea59800` by pure fast-forward (0 commits of its own) and the callback now
+answers `slug:""` with the origin pinned. Details, including the DB backup and the
+`EADDRINUSE` race on the first restart, are in the XSS section above.
 
-```
-$ curl -s 'https://grok.antinrml.com/api/apps/callback?slug=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E'
-... slug:"</script><img src=x onerror=alert(1)>",ok:true},'*')   <- verbatim, unescaped
-```
-
-`grok.rahmanef.com` is fixed (slug `""`, origin pinned). `.worktrees/prod` has 0 commits
-of its own and 39 behind, so the deploy below is a pure fast-forward.
+`grok.rahmanef.com` was already fixed (slug `""`, origin pinned).
 
 ## 2026-11-27 (last): the mobile suites refuse a stale `web/dist`
 
