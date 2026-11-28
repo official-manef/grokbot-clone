@@ -658,7 +658,7 @@ in `findOrCreateUser` still refuses a non-staff address first, so nothing else c
 
 | before | after |
 |---|---|
-| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the 404 catch-all (a 401 until 2026-11-29, when the SPA fallback that answered `200 text/html` was closed) |
+| `GET /api/auth/google/callback?attempt=…&connected_account_id=…` → `302` and a session | no handler: the request falls through to the `/api/*` 404 catch-all (until 2026-11-29 it fell through to the SPA fallback and answered `200 text/html`) |
 | `googleProfile()` reachable from a route | gone with the route |
 | `deleteConnection()` kept only for that route | gone |
 
@@ -802,7 +802,7 @@ What it was chasing is now closed honestly:
 |---|---|
 | "docs describe files deleted in `011649d`" | `011649d` deleted **nothing** — 1 add, 16 modifies. The premise was false. |
 | `AGENTS.md` names `adapters/mso.ts` and `adapters/orgo.ts` | only `adapters/docker.ts` exists; the other two backends are `server/src/mso.ts` / `orgo.ts`, siblings in `box.ts`'s dispatch table |
-| "the laptop's build is stale" | **true, and left alone** — `server/dist` 14:24:49 predates `d1963b1` (15:18), `server/dist/routes.js:272` still mounts the removed route, live `302` vs the `401` a current build gives |
+| "the laptop's build is stale" | **true at the time, and left alone in that session** — `server/dist` 14:24:49 predated `d1963b1` (15:18), so the built tree still mounted the removed route and answered live `302`. What a current build gives for that path is **`404 application/json`**, not `401`: measured on `aec018d`, `curl localhost:PORT/api/auth/google/callback` → `404 {"error":"not found"}` |
 
 `server/test/box-layout-docs.test.mjs` (3 cases) now reads the adapters directory,
 `box.ts`'s imports and the adapter's exported `createDockerBoxRuntime`, so the doc and
